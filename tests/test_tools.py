@@ -1,9 +1,12 @@
 import os
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from landlord.tools.base import Tool, ToolResult
+from landlord.tools.file_write import FileWriteTool
+from landlord.tools.file_read import FileReadTool
+from landlord.tools.shell_exec import ShellExecTool
+from landlord.tools.web_fetch import WebFetchTool
+from landlord.tools.web_search import WebSearchTool
 
 
 class TestToolResult:
@@ -34,12 +37,6 @@ class TestToolProtocol:
         assert result.success is True
         assert result.output == "hello"
 
-
-from landlord.tools.file_write import FileWriteTool
-from landlord.tools.file_read import FileReadTool
-from landlord.tools.shell_exec import ShellExecTool
-from landlord.tools.web_fetch import WebFetchTool
-from landlord.tools.web_search import WebSearchTool
 
 
 class TestFileWriteTool:
@@ -140,7 +137,6 @@ class TestWebSearchTool:
 
     async def test_search_no_api_url(self):
         tool = WebSearchTool(api_url=None, api_key=None)
-        import os
         os.environ.pop("SEARCH_API_URL", None)
         result = await tool.execute(query="something")
         assert result.success is False

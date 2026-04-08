@@ -3,7 +3,17 @@
     "allow": [
       "Bash(npm list:*)",
       "Read(//c/Users/KadeHeglin/.claude/**)",
-      "Bash(echo \"---EXIT:$?---\")"
+      "Bash(echo \"---EXIT:$?---\")",
+      "Bash(git:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest --co)",
+      "Bash(python -m pytest tests/test_contract.py -v)",
+      "Bash(python -m pytest tests/test_event_bus.py -v)",
+      "Bash(python -m pytest tests/test_tools.py -v)",
+      "Bash(python -m pytest -v)",
+      "Bash(python -m pytest tests/test_config.py -v)",
+      "Bash(python -m pytest tests/test_llm_client.py -v)",
+      "Bash(python:*)"
     ]
   }
 }

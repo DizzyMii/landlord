@@ -1,8 +1,5 @@
-import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
 
 from landlord.config import LandlordConfig
 from landlord.event_bus import EventBus
@@ -87,7 +84,7 @@ class TestFullFlow:
             tenant_llm.chat_with_tools = AsyncMock(side_effect=tenant_responses)
             mock_llm_cls.return_value = tenant_llm
 
-            results = await landlord.run("Write a greeting")
+            await landlord.run("Write a greeting")
 
         renderer.show_plan.assert_called_once()
         renderer.tenant_started.assert_called_once()
@@ -147,6 +144,6 @@ class TestFullFlow:
             return mock
 
         with patch("landlord.landlord.LLMClient", side_effect=make_tenant_mock):
-            results = await landlord.run("Do a task")
+            await landlord.run("Do a task")
 
         assert renderer.tenant_evicted.called or renderer.checkpoint_failed.called

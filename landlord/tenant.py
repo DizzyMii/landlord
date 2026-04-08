@@ -10,7 +10,7 @@ from typing import Any
 from landlord.contract import Contract
 from landlord.event_bus import Event, EventBus
 from landlord.llm_client import LLMClient
-from landlord.tools.base import Tool, ToolResult
+from landlord.tools.base import Tool
 
 
 EMIT_CHECKPOINT_TOOL = {

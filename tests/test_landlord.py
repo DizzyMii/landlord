@@ -1,8 +1,7 @@
 import asyncio
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 from landlord.landlord import Landlord
 from landlord.config import LandlordConfig

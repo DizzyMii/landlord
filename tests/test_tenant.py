@@ -1,8 +1,6 @@
-import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from pathlib import Path
 
 from landlord.tenant import Tenant
 from landlord.contract import Contract, Checkpoint
