@@ -12,8 +12,8 @@
 
 Instead, please report them responsibly via one of the following:
 
-- **Email**: security@your-domain.com
-- **GitHub Security Advisories**: [Report a vulnerability](https://github.com/your-org/landlord-framework/security/advisories/new)
+- **Email**: kadeheglin@gmail.com
+- **GitHub Security Advisories**: [Report a vulnerability](https://github.com/DizzyMii/landlord-framework/security/advisories/new)
 
 ### What to include
 

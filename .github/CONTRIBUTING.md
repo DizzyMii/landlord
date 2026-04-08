@@ -14,7 +14,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone your fork
-git clone https://github.com/your-username/landlord-framework.git
+git clone https://github.com/DizzyMii/landlord-framework.git
 cd landlord-framework
 
 # Install dependencies
@@ -61,4 +61,4 @@ By participating, you agree to uphold our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Questions?
 
-Open a [Discussion](https://github.com/your-org/landlord-framework/discussions) for questions that aren't bugs or feature requests.
+Open a [Discussion](https://github.com/DizzyMii/landlord-framework/discussions) for questions that aren't bugs or feature requests.
