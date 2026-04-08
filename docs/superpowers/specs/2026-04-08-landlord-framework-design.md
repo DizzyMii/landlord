@@ -26,6 +26,7 @@ A Pydantic model defining everything a tenant needs and is bound by:
 - `output_schema: dict` — JSON Schema defining expected final output structure.
 - `tools_allowed: list[str] | None` — whitelist of tools (if set, only these are available).
 - `tools_denied: list[str] | None` — blacklist of tools (if set, everything except these).
+- `depends_on: list[str] | None` — roles whose checkpoint artifacts this tenant needs before launching.
 - `max_retries: int` — how many eviction/retry cycles before escalating to user.
 - `context: str | None` — additional context (e.g., violation info on retry).
 
@@ -46,6 +47,7 @@ An isolated async worker:
 - Emits events at checkpoints via the EventBus.
 - Writes artifacts to its own isolated subdirectory.
 - Has no awareness of other tenants.
+- Can receive **read-only shared artifacts** injected by the Landlord from other tenants' verified checkpoint outputs (e.g., a DB schema produced by Tenant A can be shared into Tenant B's context). Tenants never access each other directly — the Landlord curates what gets shared and when.
 
 ### EventBus
 
@@ -61,8 +63,8 @@ Async pub/sub system for tenant-to-landlord communication:
 2. **Decomposition** → Landlord makes an LLM call to analyze the prompt and produce a structured plan (list of contracts).
 3. **User approval gate** → Plan is printed to the terminal. User can approve, modify, or reject.
 4. **Tenant launch** → All approved tenants launch as concurrent `asyncio.Task`s.
-5. **Checkpoint validation** → When a tenant hits a checkpoint, it emits an event. The Landlord validates the output against the checkpoint schema using Pydantic.
-6. **Violation judgment** → If schema validation fails, the Landlord makes an LLM call to judge whether the deviation is acceptable or a real violation.
+5. **Checkpoint validation** → When a tenant hits a checkpoint, it emits an event. The output is validated through a tiered pipeline (see Tiered Validation below).
+6. **Violation judgment** → If Tier 1+2 validation fails but the failure is ambiguous, the Landlord makes an LLM call (Tier 3) to judge whether the deviation is acceptable or a real violation.
 7. **Eviction** → On invalid violation, the tenant task is cancelled. A new contract is generated with the original objective, what went wrong, and tighter constraints. A fresh tenant spins up with a clean slate.
 8. **Retry limit** → If retries are exhausted, the Landlord escalates to the user for guidance.
 9. **Completion** → Tenant artifacts are written to disk. Progress streams to the terminal in real-time.
@@ -97,6 +99,34 @@ User Prompt
                           │        clean slate + violation context
                           └─ NO  → escalate to user
 ```
+
+## Tiered Validation Pipeline
+
+Checkpoint validation runs through three tiers. Each tier is cheaper/faster than the next. Only escalate when the current tier can't determine validity.
+
+| Tier | Mechanism | Cost | When it fires |
+|------|-----------|------|---------------|
+| **Tier 1** | Pydantic schema validation | Free, instant | Always — every checkpoint output is validated against its JSON Schema |
+| **Tier 2** | Static analysis (linting, type checking, custom rules) | Cheap, local | When the checkpoint involves code artifacts — runs language-appropriate linters/type checkers via `shell_exec` |
+| **Tier 3** | LLM judgment | Expensive | Only when Tier 1+2 pass structurally but the Landlord needs to assess semantic correctness, or when Tier 1+2 fail ambiguously |
+
+- Tier 1 failures are always violations (wrong structure = wrong output).
+- Tier 2 failures are always violations (code that doesn't lint/typecheck is broken).
+- Tier 3 is the only tier that can rule a deviation "acceptable" — e.g., the tenant used a different but valid approach.
+
+The validator module manages tier progression and short-circuits early when possible.
+
+## Shared Artifacts
+
+Tenants are isolated but real tasks have dependencies. The Landlord manages artifact sharing:
+
+- When a tenant passes a checkpoint, the Landlord can mark specific outputs as **shared artifacts**.
+- Shared artifacts are copied read-only into dependent tenants' context (not their working directory — injected into the LLM conversation).
+- The contract can declare `depends_on: list[str]` — a list of other contract roles whose checkpoint artifacts this tenant needs.
+- The Landlord ensures dependent tenants don't launch until their dependencies have produced the required artifacts.
+- Tenants never access each other's directories directly. The Landlord is always the intermediary.
+
+This preserves isolation while enabling collaboration on complex multi-part tasks.
 
 ## Provider Abstraction & LLM Layer
 
