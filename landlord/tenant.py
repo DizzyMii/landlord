@@ -7,30 +7,42 @@ import json
 from pathlib import Path
 from typing import Any
 
-from landlord.contract import Contract
+from landlord.contract import Checkpoint, Contract
 from landlord.event_bus import Event, EventBus
 from landlord.llm_client import LLMClient
 from landlord.tools.base import Tool
 
+import re
 
-EMIT_CHECKPOINT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "emit_checkpoint",
-        "description": (
-            "Declare that you have reached a checkpoint. "
-            "The name must match one of the checkpoints in your contract."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Checkpoint name"},
-                "output": {"type": "object", "description": "Checkpoint output data"},
+CHECKPOINT_TOOL_PREFIX = "emit_checkpoint__"
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """Sanitize a name for use in an OpenAI tool name (alphanumeric, _, -)."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+
+
+def _build_checkpoint_tool(cp: Checkpoint) -> dict:
+    """Build a tool definition for a specific checkpoint.
+
+    Each checkpoint gets its own tool so the LLM's structured
+    tool-calling is forced to populate the required output fields.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": f"{CHECKPOINT_TOOL_PREFIX}{_sanitize_tool_name(cp.name)}",
+            "description": (
+                f"Declare that you have reached checkpoint '{cp.name}': {cp.description}. "
+                f"You MUST include all required fields in the parameters."
+            ),
+            "parameters": cp.schema if cp.schema.get("type") == "object" else {
+                "type": "object",
+                "properties": {"result": cp.schema},
+                "required": ["result"],
             },
-            "required": ["name", "output"],
         },
-    },
-}
+    }
 
 
 class Tenant:
@@ -55,16 +67,28 @@ class Tenant:
         allowed_names = contract.effective_tools(list(tools.keys()))
         self._tools = {name: tools[name] for name in allowed_names if name in tools}
 
+        # Map sanitized checkpoint tool names back to original checkpoint names
+        self._checkpoint_name_map = {
+            _sanitize_tool_name(cp.name): cp.name for cp in contract.checkpoints
+        }
+
     def _build_system_message(self) -> str:
         parts = [
             f"You are a {self.contract.role}.",
             f"Objective: {self.contract.objective}",
         ]
         if self.contract.checkpoints:
-            cp_desc = "\n".join(
-                f"- {cp.name}: {cp.description}" for cp in self.contract.checkpoints
+            cp_lines = []
+            for cp in self.contract.checkpoints:
+                tool_name = f"{CHECKPOINT_TOOL_PREFIX}{_sanitize_tool_name(cp.name)}"
+                cp_lines.append(
+                    f"- Call tool '{tool_name}' when: {cp.description}"
+                )
+            parts.append(
+                "Checkpoints to hit (each has its own tool — call the "
+                "corresponding tool with the required fields):\n"
+                + "\n".join(cp_lines)
             )
-            parts.append(f"Checkpoints to hit (call emit_checkpoint for each):\n{cp_desc}")
         if self._tools:
             tool_desc = "\n".join(f"- {name}" for name in self._tools)
             parts.append(f"Available tools:\n{tool_desc}")
@@ -73,7 +97,11 @@ class Tenant:
         return "\n\n".join(parts)
 
     def _build_tool_defs(self) -> list[dict]:
-        defs = [EMIT_CHECKPOINT_TOOL]
+        defs = []
+        # Add checkpoint-specific tools
+        for cp in self.contract.checkpoints:
+            defs.append(_build_checkpoint_tool(cp))
+        # Add standard tools
         for tool in self._tools.values():
             defs.append({
                 "type": "function",
@@ -113,21 +141,24 @@ class Tenant:
                     fn_name = tool_call.function.name
                     fn_args = json.loads(tool_call.function.arguments)
 
-                    if fn_name == "emit_checkpoint":
+                    if fn_name.startswith(CHECKPOINT_TOOL_PREFIX):
+                        sanitized = fn_name[len(CHECKPOINT_TOOL_PREFIX):]
+                        cp_name = self._checkpoint_name_map.get(sanitized, sanitized)
+                        # The args ARE the output (the schema is the tool params)
                         future: asyncio.Future = asyncio.get_event_loop().create_future()
                         await self._bus.publish(Event(
                             tenant_id=self.contract.tenant_id,
                             event_type="checkpoint_reached",
                             payload={
-                                "name": fn_args["name"],
-                                "output": fn_args.get("output", {}),
+                                "name": cp_name,
+                                "output": fn_args,
                                 "future": future,
                             },
                         ))
                         validation_result = await future
                         if not validation_result.passed:
                             return
-                        tool_result_content = f"Checkpoint '{fn_args['name']}' validated successfully."
+                        tool_result_content = f"Checkpoint '{cp_name}' validated successfully."
                     elif fn_name in self._tools:
                         result = await self._tools[fn_name].execute(**fn_args)
                         tool_result_content = result.output if result.success else f"Error: {result.error}"

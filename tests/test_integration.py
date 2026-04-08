@@ -63,7 +63,7 @@ class TestFullFlow:
 
         tenant_responses = [
             make_tenant_tool_response("file_write", {"path": "greeting.txt", "content": "Hello!"}),
-            make_tenant_tool_response("emit_checkpoint", {"name": "greeting_written", "output": {"file": "greeting.txt"}}),
+            make_tenant_tool_response("emit_checkpoint__greeting_written", {"file": "greeting.txt"}),
             make_tenant_text_response("Done! I wrote the greeting."),
         ]
 
@@ -133,12 +133,12 @@ class TestFullFlow:
             mock = MagicMock(spec=LLMClient)
             if attempt[0] == 1:
                 mock.chat_with_tools = AsyncMock(side_effect=[
-                    make_tenant_tool_response("emit_checkpoint", {"name": "done", "output": {"bad": "data"}}),
+                    make_tenant_tool_response("emit_checkpoint__done", {"bad": "data"}),
                     make_tenant_text_response("Done"),
                 ])
             else:
                 mock.chat_with_tools = AsyncMock(side_effect=[
-                    make_tenant_tool_response("emit_checkpoint", {"name": "done", "output": {"result": "success"}}),
+                    make_tenant_tool_response("emit_checkpoint__done", {"result": "success"}),
                     make_tenant_text_response("Done properly this time"),
                 ])
             return mock

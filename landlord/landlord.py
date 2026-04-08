@@ -29,6 +29,12 @@ For each sub-task, provide:
 - tools_denied: tool blacklist (null if unrestricted)
 - depends_on: list of other role names this tenant needs artifacts from before starting
 
+IMPORTANT rules for checkpoint schemas:
+- Keep schemas SIMPLE and LENIENT. Use basic type checks only (e.g. {{"type": "object", "properties": {{"result": {{"type": "string"}}}}, "required": ["result"]}}).
+- NEVER use "enum", "const", "pattern", or "minItems" in schemas. The schema validates structure, not content.
+- Semantic correctness is checked separately by LLM judgment, not by the schema.
+- Each checkpoint schema must have at least one required property so the tenant knows what to include.
+
 Return ONLY a JSON array of contract objects. No markdown, no explanation.
 
 User request: {prompt}"""
@@ -174,7 +180,12 @@ class Landlord:
             if contract.role in self._dependency_events:
                 self._dependency_events[contract.role].set()
         else:
-            self._renderer.checkpoint_failed(tenant_id, name, result.explanation)
+            detail = result.explanation
+            if result.errors:
+                detail += f" — {'; '.join(result.errors)}"
+            if self._config.verbose:
+                detail += f"\n  Schema: {json.dumps(checkpoint.schema)}\n  Output: {json.dumps(output)}"
+            self._renderer.checkpoint_failed(tenant_id, name, detail)
 
         if future:
             future.set_result(result)

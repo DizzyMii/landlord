@@ -107,7 +107,7 @@ class TestTenant:
         await bus.subscribe("checkpoint_reached", capture)
 
         mock_llm.chat_with_tools = AsyncMock(side_effect=[
-            make_tool_call_response("emit_checkpoint", {"name": "step1", "output": {"status": "ok"}}),
+            make_tool_call_response("emit_checkpoint__step1", {"status": "ok"}),
             make_text_response("Done!"),
         ])
 
