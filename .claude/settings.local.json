@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm list:*)",
+      "Read(//c/Users/KadeHeglin/.claude/**)",
+      "Bash(echo \"---EXIT:$?---\")"
+    ]
+  }
+}

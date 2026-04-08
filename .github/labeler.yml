@@ -1,0 +1,36 @@
+# Configuration for actions/labeler
+# Automatically labels PRs based on changed file paths
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ["docs/**", "**/*.md", "!.github/**/*.md"]
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/workflows/**", ".github/*.yml"]
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"
+          - "yarn.lock"
+          - "pnpm-lock.yaml"
+          - "Gemfile*"
+          - "requirements*.txt"
+          - "Cargo.toml"
+          - "go.mod"
+          - "go.sum"
+
+# Add your own path-based labels below:
+# frontend:
+#   - changed-files:
+#       - any-glob-to-any-file: ["src/ui/**", "src/components/**"]
+#
+# backend:
+#   - changed-files:
+#       - any-glob-to-any-file: ["src/api/**", "src/services/**"]
+#
+# infrastructure:
+#   - changed-files:
+#       - any-glob-to-any-file: ["infra/**", "terraform/**", "docker/**"]
