@@ -1,0 +1,60 @@
+<h2>CLI Layout — How should parallel tenants display?</h2>
+<p class="subtitle">Each tenant streams work in real-time. How should multiple tenants share the screen?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Stacked Panels</h3>
+      <p>Each tenant gets a bordered panel. All visible at once, scrolling vertically. Like docker-compose logs with labels.</p>
+      <div style="font-family:monospace;font-size:12px;background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;color:#e0e0e0;">
+        <div style="border:1px solid #4a9eff;padding:8px;margin-bottom:8px;border-radius:4px;">
+          <span style="color:#4a9eff;font-weight:bold;">backend_engineer</span> <span style="color:#888;">running</span><br/>
+          <span style="color:#666;">▸</span> Writing REST API routes...<br/>
+          <span style="color:#666;">▸</span> <span style="color:#50fa7b;">✓</span> Checkpoint routes_defined passed
+        </div>
+        <div style="border:1px solid #ff79c6;padding:8px;border-radius:4px;">
+          <span style="color:#ff79c6;font-weight:bold;">frontend_engineer</span> <span style="color:#f1fa8c;">waiting on backend_engineer</span><br/>
+          <span style="color:#666;">⏳ Blocked by dependency</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Focused View + Status Bar</h3>
+      <p>One active tenant streams at a time (most interesting one). A compact status bar at the bottom shows all tenants. Like Claude Code's single-agent focus with a multi-agent twist.</p>
+      <div style="font-family:monospace;font-size:12px;background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;color:#e0e0e0;">
+        <div style="margin-bottom:8px;">
+          <span style="color:#4a9eff;font-weight:bold;">❯ backend_engineer</span><br/>
+          <span style="color:#ccc;">I'll create the Express server with JWT auth middleware...</span><br/>
+          <span style="color:#50fa7b;">  ✓ file_write</span> <span style="color:#888;">src/server.js</span><br/>
+          <span style="color:#ccc;">Now setting up the routes...</span>
+        </div>
+        <div style="border-top:1px solid #333;padding-top:6px;font-size:11px;">
+          <span style="color:#50fa7b;">● backend</span> &nbsp;
+          <span style="color:#f1fa8c;">○ frontend</span> &nbsp;
+          <span style="color:#888;">○ tester</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Timeline Feed</h3>
+      <p>All tenant events interleave chronologically in one stream, color-coded by tenant. Like a unified activity log. Simpler but can get noisy with many tenants.</p>
+      <div style="font-family:monospace;font-size:12px;background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;color:#e0e0e0;">
+        <span style="color:#4a9eff;">[backend]</span> Writing REST API routes...<br/>
+        <span style="color:#ff79c6;">[frontend]</span> Waiting for backend artifacts...<br/>
+        <span style="color:#4a9eff;">[backend]</span> <span style="color:#50fa7b;">✓</span> file_write src/server.js<br/>
+        <span style="color:#4a9eff;">[backend]</span> Setting up auth middleware...<br/>
+        <span style="color:#4a9eff;">[backend]</span> <span style="color:#50fa7b;">✓</span> Checkpoint routes_defined passed<br/>
+        <span style="color:#ff79c6;">[frontend]</span> Starting React component design...
+      </div>
+    </div>
+  </div>
+</div>
