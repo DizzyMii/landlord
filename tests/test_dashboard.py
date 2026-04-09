@@ -28,6 +28,13 @@ class TestDashboard:
         assert d.total_tokens == 150
         assert d.estimated_cost == 0.0
 
+    def test_multiple_token_updates_accumulate(self, dashboard):
+        dashboard.update_tokens(prompt_tokens=100, completion_tokens=50)
+        dashboard.update_tokens(prompt_tokens=200, completion_tokens=100)
+        assert dashboard.total_tokens == 450
+        assert dashboard._prompt_tokens == 300
+        assert dashboard._completion_tokens == 150
+
     def test_tenant_status_update(self, dashboard):
         dashboard.set_tenant_status("t1", "backend_engineer", "running")
         assert dashboard.tenant_statuses["t1"] == ("backend_engineer", "running")
