@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,8 +65,14 @@ class CheckpointVerdict:
 
 @dataclass
 class TenantResult:
-    status: str  # "complete" | "evicted"
+    # "complete" when the SDK session returned normally; "evicted" when
+    # the task was cancelled mid-session.
+    status: str
+    # Populated only for status="evicted"; e.g., "cancelled".
     reason: str | None = None
+    # Args of the most recent *passing* checkpoint call, or None if no
+    # checkpoint passed this attempt. On a multi-checkpoint tenant this
+    # is last-pass-wins globally (not per-checkpoint).
     last_output: dict | None = None
 
 
@@ -116,6 +121,23 @@ class TenantRunner:
         return defs
 
     async def run(self) -> TenantResult:
+        """Run the tenant's SDK session and return the final result.
+
+        Returns:
+            TenantResult with status="complete" when the session ends
+            normally, or status="evicted" / reason="cancelled" when the
+            asyncio task wrapping this coroutine is cancelled.
+
+        Raises:
+            Any exception from the injected sdk_session_factory, the
+            underlying SDK session's run(), or the supplied checkpoint
+            handler will propagate unchanged. asyncio.CancelledError is
+            the only exception this method catches and converts into a
+            TenantResult. All others (e.g., the validator's RuntimeError
+            when the judge model refuses the forced tool) are the
+            caller's responsibility - the orchestrator uses them to
+            distinguish infrastructure failures from contract failures.
+        """
         system_prompt = build_system_prompt(
             contract=self._contract,
             shared_context=self._shared_context,

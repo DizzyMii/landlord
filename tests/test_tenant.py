@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from landlord.contract import Checkpoint, Contract
 from landlord.tenant import (
     CHECKPOINT_TOOL_PREFIX,
+    CheckpointVerdict,
     TenantRunner,
     build_system_prompt,
     sanitize_tool_name,
@@ -105,7 +104,6 @@ async def test_tenant_run_passes_checkpoint_and_records_output(tmp_path: Path):
 
     async def handler(name, args):
         handler_calls.append((name, args))
-        from landlord.tenant import CheckpointVerdict
         return CheckpointVerdict(passed=True, reason="ok")
 
     runner = TenantRunner(
@@ -133,7 +131,6 @@ async def test_tenant_run_returns_early_when_checkpoint_fails(tmp_path: Path):
     ])
 
     async def handler(name, args):
-        from landlord.tenant import CheckpointVerdict
         return CheckpointVerdict(passed=False, reason="wrong format")
 
     runner = TenantRunner(
@@ -164,7 +161,6 @@ async def test_tenant_run_handles_cancellation(tmp_path: Path):
         return HangingSession()
 
     async def handler(name, args):
-        from landlord.tenant import CheckpointVerdict
         return CheckpointVerdict(passed=True, reason="ok")
 
     runner = TenantRunner(
