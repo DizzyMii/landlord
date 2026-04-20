@@ -1,18 +1,54 @@
-# Landlord Framework
+# Landlord
 
-Contract-based agent orchestration, exposed as an MCP server.
+**Parallel Claude agents with contracts, not prompts.**
 
-A calling LLM (Claude Code, Cursor, Cline, or any MCP client) can hand Landlord a
-natural-language task; Landlord decomposes it into a plan of parallel tenant agents,
-returns the plan for review, launches the tenants as concurrent Claude Agent SDK
-sessions, validates their checkpoints, evicts and retries misbehaving tenants, and
-returns the per-role artifacts.
+Landlord turns a single natural-language task into a plan of parallel Claude Agent
+SDK sessions — each bound by a *contract* (objective, checkpoints, JSON-schema
+outputs). Tenants that violate their contract get evicted and retried with fresh
+context. Every checkpoint output is validated against a JSON Schema *and* a
+structured LLM judge (via tool-use — no substring matching). Everything runs as
+an MCP server over stdio, so any MCP client (Claude Code, Cursor, Cline) can
+drive it.
 
-## Install
+### Why
+
+- **No API credits required.** Drives `claude_agent_sdk.query()`, which honors
+  `CLAUDE_CODE_OAUTH_TOKEN`. Your Claude Pro/Max subscription runs decompose,
+  tenants, and the judge.
+- **Contracts, not prompts.** Structured output enforced by JSON Schema + LLM
+  judge on every checkpoint. No "I hope the model said PASS."
+- **Tenants inherit your Claude Code config.** Skills, `CLAUDE.md`, hooks, user
+  MCP servers — all available inside every tenant via `setting_sources=["user"]`
+  and `skills="all"`.
+- **5-tool MCP surface** — `start_orchestration`, `approve_plan`, `get_status`,
+  `get_artifacts`, `cancel`. That's the whole API.
+- **~1,200 LOC runtime, 52 tests.** Readable in an afternoon.
+
+### 60-second install
 
 ```bash
 pip install -e .
+claude setup-token                       # one-time: get your OAuth token
+setx CLAUDE_CODE_OAUTH_TOKEN "<paste>"   # Windows. Unix: export CLAUDE_CODE_OAUTH_TOKEN=...
+claude mcp add -s user landlord landlord-mcp
 ```
+
+Restart Claude Code. The five Landlord tools become discoverable; ask the model
+to orchestrate something.
+
+### Watch it work
+
+Every tenant's SDK chatter streams to a tailable log:
+
+```bash
+tail -f ./landlord-output/<job_id>/job.json                   # orchestration state
+tail -f ./landlord-output/<job_id>/<tenant_id>/session.log    # tenant model activity
+ls  ./landlord-output/<job_id>/shared/                         # dependency artifacts
+```
+
+---
+
+## Auth details
 
 Authenticate against your Claude Pro/Max subscription (no API credits needed):
 
