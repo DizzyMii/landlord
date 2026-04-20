@@ -369,21 +369,46 @@ _TERMINAL_JOB_STATUSES = ("complete", "partial", "cancelled")
 
 
 class _PermissionDecision(BaseModel):
-    """Schema for the elicitation prompt that asks the user to allow/deny a tenant tool call."""
+    """Schema for the elicitation prompt that asks the user to allow/deny a tenant tool call.
 
-    allow: bool = Field(
-        description=(
-            "True to allow the tenant to use the tool with the proposed input. "
-            "False to deny — the tenant will receive an error and decide how to proceed."
-        )
+    The form deliberately has only an optional `notes` field so the user can
+    submit with a single click. The accept/decline action itself carries the
+    decision — Accept means allow, Decline means deny.
+    """
+
+    notes: str = Field(
+        default="",
+        description="Optional notes about this decision (not required).",
     )
+
+
+# Tools that should never trigger an elicitation prompt. The checkpoint tools
+# are how the tenant communicates back to the orchestrator; denying them just
+# breaks the orchestration. Filesystem-read tools are read-only and very high
+# volume — prompting on every Read/Grep/Glob makes the UX unusable.
+_AUTO_APPROVE_PREFIXES = ("mcp__checkpoints__",)
+_AUTO_APPROVE_TOOLS = frozenset({
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
+    "TodoRead", "TodoWrite",  # local-only state, no I/O
+})
+
+
+def _is_auto_approved(tool_name: str) -> bool:
+    if tool_name in _AUTO_APPROVE_TOOLS:
+        return True
+    return any(tool_name.startswith(p) for p in _AUTO_APPROVE_PREFIXES)
 
 
 def _build_permission_callback(ctx: Any):
     """Construct a PermissionCallback that forwards tenant tool decisions to
-    the calling Claude session via Context.elicit. Falls back to allow if the
-    client doesn't support elicitation or any other error occurs."""
+    the calling Claude session via Context.elicit. Auto-approves checkpoint
+    tools (orchestration infrastructure) and read-only tools (high volume,
+    low risk). Falls back to allow if the client doesn't support elicitation
+    or any other error occurs."""
     async def callback(role: str, tool_name: str, tool_input: dict[str, Any]) -> bool:
+        if _is_auto_approved(tool_name):
+            return True
+
         # Truncate the input preview so the prompt stays readable.
         try:
             input_str = json.dumps(tool_input, default=str)
@@ -395,18 +420,16 @@ def _build_permission_callback(ctx: Any):
         message = (
             f"Tenant '{role}' wants to use tool '{tool_name}'.\n\n"
             f"Input: {input_str}\n\n"
-            f"Allow this tool call?"
+            f"Click Accept to allow, Decline to deny."
         )
         try:
             result = await ctx.elicit(message=message, schema=_PermissionDecision)
-            data = getattr(result, "data", None)
             action = getattr(result, "action", None)
-            if action == "accept" and data is not None:
-                return bool(getattr(data, "allow", True))
-            # Decline / cancel from the user is treated as a deny.
+            if action == "accept":
+                return True
             if action in ("decline", "cancel"):
                 return False
-            # Unknown shape — default allow so the orchestration doesn't deadlock.
+            # Unknown action — default allow so the orchestration doesn't deadlock.
             return True
         except Exception:
             return True
