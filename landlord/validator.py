@@ -53,6 +53,17 @@ class Validator:
         checkpoint: Checkpoint,
         contract: Contract,
     ) -> ValidationResult:
+        """Validate a checkpoint output through Tier 1 (JSON Schema) and,
+        if that passes, Tier 2 (structured LLM judge).
+
+        Raises:
+            RuntimeError: if the judge model does not emit the forced
+                judge_checkpoint tool (e.g., a safety refusal or an API
+                error). Callers (e.g., the orchestrator) must handle
+                this — it is intentionally not converted to a passed=False
+                result so that "judge unavailable" can be distinguished
+                from "judge said fail".
+        """
         tier1 = self._validate_schema(output, checkpoint)
         if not tier1.passed:
             return tier1

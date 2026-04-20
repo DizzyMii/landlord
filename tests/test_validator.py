@@ -101,3 +101,55 @@ async def test_judge_call_uses_cached_system_and_forced_tool():
     assert len(system_blocks) == 1
     assert system_blocks[0].cache is True
     assert call.kwargs["tool"]["name"] == "judge_checkpoint"
+
+
+@pytest.mark.asyncio
+async def test_empty_schema_always_passes_tier1():
+    """An empty JSON Schema validates any object — Tier 2 becomes the sole gate."""
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
+
+    validator = Validator(client=mock_client)
+    checkpoint = Checkpoint(name="loose", description="anything goes", schema={})
+    result = await validator.validate_checkpoint(
+        output={"anything": "at all"},
+        checkpoint=checkpoint,
+        contract=_contract(),
+    )
+
+    assert result.passed is True
+    assert result.tier == 2
+    mock_client.call_forced_tool.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_judge_user_message_contains_contract_checkpoint_and_output():
+    """Regression guard: the judge must see objective, checkpoint name, description, and output."""
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
+
+    validator = Validator(client=mock_client)
+    contract = Contract(
+        role="worker",
+        objective="implement a greeter",
+        sub_prompt="do it",
+        checkpoints=[],
+        output_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+    )
+    checkpoint = Checkpoint(
+        name="greeting ready",
+        description="the greeter module prints hello",
+        schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+    )
+    await validator.validate_checkpoint(
+        output={"x": "hello world"},
+        checkpoint=checkpoint,
+        contract=contract,
+    )
+
+    call = mock_client.call_forced_tool.call_args
+    user_content = call.kwargs["messages"][0]["content"]
+    assert "implement a greeter" in user_content
+    assert "greeting ready" in user_content
+    assert "the greeter module prints hello" in user_content
+    assert "hello world" in user_content
