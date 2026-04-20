@@ -217,10 +217,50 @@ class _SDKSessionAdapter:
             setting_sources=["user"],
             skills="all",
         )
-        async with self._ClaudeSDKClient(options=options) as client:
-            await client.query(sub_prompt)
-            async for _message in client.receive_response():
-                pass
+        log_path = Path(self._work_dir) / "session.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8", buffering=1) as log:
+            log.write(f"=== tenant session start: model={self._model} ===\n")
+            log.write(f"=== sub_prompt ===\n{sub_prompt}\n=== end sub_prompt ===\n")
+            async with self._ClaudeSDKClient(options=options) as client:
+                await client.query(sub_prompt)
+                async for message in client.receive_response():
+                    log.write(_format_message_for_log(message))
+                    log.write("\n")
+            log.write("=== tenant session end ===\n")
+
+
+def _format_message_for_log(message: Any) -> str:
+    """Render an SDK message as a single tail-friendly block.
+
+    Tries to unpack the common message types (assistant text, thinking, tool
+    use/result, rate limit info) and falls back to repr() for unknown shapes.
+    """
+    kind = type(message).__name__
+    content = getattr(message, "content", None)
+    if content is None:
+        return f"[{kind}] {message!r}"
+    parts: list[str] = [f"[{kind}]"]
+    if isinstance(content, list):
+        for block in content:
+            block_kind = type(block).__name__
+            text = getattr(block, "text", None)
+            if text is not None:
+                parts.append(f"  <{block_kind}> {text}")
+                continue
+            tool_name = getattr(block, "name", None)
+            tool_input = getattr(block, "input", None)
+            if tool_name is not None:
+                parts.append(f"  <{block_kind}> tool={tool_name} input={tool_input!r}")
+                continue
+            result = getattr(block, "content", None)
+            if result is not None:
+                parts.append(f"  <{block_kind}> result={result!r}")
+                continue
+            parts.append(f"  <{block_kind}> {block!r}")
+    else:
+        parts.append(f"  {content!r}")
+    return "\n".join(parts)
 
 
 def build_default_server() -> LandlordServer:
