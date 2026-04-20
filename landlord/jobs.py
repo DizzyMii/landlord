@@ -17,6 +17,10 @@ JobStatus = str  # "awaiting_approval" | "running" | "complete" | "partial" | "c
 TenantStatusLiteral = str  # "pending" | "running" | "complete" | "evicted" | "escalated"
 
 
+class UnknownJobError(KeyError):
+    """Raised when a job_id has no entry in the registry."""
+
+
 @dataclass
 class TenantState:
     contract: Contract
@@ -77,7 +81,9 @@ class Job:
         }
 
     def write_sidecar(self) -> None:
-        (self.output_dir / "job.json").write_text(json.dumps(self.to_dict(), indent=2))
+        (self.output_dir / "job.json").write_text(
+            json.dumps(self.to_dict(), indent=2, default=str)
+        )
 
 
 class JobRegistry:
@@ -85,11 +91,18 @@ class JobRegistry:
         self._jobs: dict[str, Job] = {}
         self._lock = asyncio.Lock()
 
+    def _get_or_raise(self, job_id: str) -> Job:
+        """Lookup job by id or raise UnknownJobError. Caller must hold _lock."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise UnknownJobError(job_id)
+        return job
+
     async def create_job(self, prompt: str, plan: list[Contract], output_dir: Path) -> Job:
         job = Job.create(prompt=prompt, plan=plan, output_dir=output_dir)
         async with self._lock:
             self._jobs[job.job_id] = job
-        job.write_sidecar()
+            job.write_sidecar()
         return job
 
     async def get(self, job_id: str) -> Job | None:
@@ -98,19 +111,19 @@ class JobRegistry:
 
     async def transition(self, job_id: str, new_status: JobStatus) -> Job:
         async with self._lock:
-            job = self._jobs[job_id]
+            job = self._get_or_raise(job_id)
             job.status = new_status
             if new_status == "running" and job.approved_at is None:
                 job.approved_at = time.time()
-        job.write_sidecar()
+            job.write_sidecar()
         return job
 
     async def replace_plan(self, job_id: str, new_plan: list[Contract]) -> Job:
         async with self._lock:
-            job = self._jobs[job_id]
+            job = self._get_or_raise(job_id)
             job.plan = list(new_plan)
             job.tenants = {c.tenant_id: TenantState(contract=c) for c in new_plan}
-        job.write_sidecar()
+            job.write_sidecar()
         return job
 
     def all_ids(self) -> list[str]:

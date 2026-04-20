@@ -90,6 +90,22 @@ async def test_registry_get_returns_none_for_unknown_id():
 
 
 @pytest.mark.asyncio
+async def test_registry_transition_raises_unknown_job_error_for_unknown_id():
+    from landlord.jobs import UnknownJobError
+    reg = JobRegistry()
+    with pytest.raises(UnknownJobError):
+        await reg.transition("nonexistent", "running")
+
+
+@pytest.mark.asyncio
+async def test_registry_replace_plan_raises_unknown_job_error_for_unknown_id():
+    from landlord.jobs import UnknownJobError
+    reg = JobRegistry()
+    with pytest.raises(UnknownJobError):
+        await reg.replace_plan("nonexistent", [_simple_contract("x")])
+
+
+@pytest.mark.asyncio
 async def test_tenant_state_to_dict_roundtrip(tmp_path: Path):
     plan = [_simple_contract("a")]
     job = Job.create(prompt="p", plan=plan, output_dir=tmp_path)
