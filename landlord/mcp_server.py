@@ -63,6 +63,8 @@ class LandlordServer:
             "job_id": job.job_id,
             "status": job.status,
             "plan": [c.model_dump() for c in job.plan],
+            "output_dir": str(job.output_dir),
+            "watch_command": f"landlord-watch {job.job_id} --output-dir {str(resolved_dir)!r}",
         }
 
     async def approve_plan(
@@ -106,6 +108,7 @@ class LandlordServer:
             "status": job.status,
             "plan": [c.model_dump() for c in job.plan],
             "tenants": [t.to_dict() for t in job.tenants.values()],
+            "output_dir": str(job.output_dir),
         }
 
     async def get_artifacts(self, job_id: str) -> dict[str, Any]:
