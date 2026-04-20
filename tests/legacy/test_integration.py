@@ -1,12 +1,12 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from landlord.config import LandlordConfig
-from landlord.event_bus import EventBus
-from landlord.landlord import Landlord
-from landlord.llm_client import LLMClient
-from landlord.renderer import Renderer
-from landlord.validator import Validator, ValidationResult
+from landlord.legacy.config import LandlordConfig
+from landlord.legacy.event_bus import EventBus
+from landlord.legacy.landlord import Landlord
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.renderer import Renderer
+from landlord.legacy.validator import Validator, ValidationResult
 
 
 def make_decompose_response():
@@ -79,7 +79,7 @@ class TestFullFlow:
             validator=validator, renderer=renderer,
         )
 
-        with patch("landlord.landlord.LLMClient") as mock_llm_cls:
+        with patch("landlord.legacy.landlord.LLMClient") as mock_llm_cls:
             tenant_llm = MagicMock(spec=LLMClient)
             tenant_llm.chat_with_tools = AsyncMock(side_effect=tenant_responses)
             mock_llm_cls.return_value = tenant_llm
@@ -143,7 +143,7 @@ class TestFullFlow:
                 ])
             return mock
 
-        with patch("landlord.landlord.LLMClient", side_effect=make_tenant_mock):
+        with patch("landlord.legacy.landlord.LLMClient", side_effect=make_tenant_mock):
             await landlord.run("Do a task")
 
         assert renderer.tenant_evicted.called or renderer.checkpoint_failed.called

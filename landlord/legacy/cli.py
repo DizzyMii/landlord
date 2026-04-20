@@ -8,14 +8,14 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 
-from landlord.config import LandlordConfig
-from landlord.dashboard import Dashboard
-from landlord.event_bus import EventBus
-from landlord.llm_client import LLMClient
-from landlord.landlord import Landlord
-from landlord.renderer import LiveRenderer
-from landlord.repl import Repl
-from landlord.validator import Validator
+from landlord.legacy.config import LandlordConfig
+from landlord.legacy.dashboard import Dashboard
+from landlord.legacy.event_bus import EventBus
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.landlord import Landlord
+from landlord.legacy.renderer import LiveRenderer
+from landlord.legacy.repl import Repl
+from landlord.legacy.validator import Validator
 
 app = typer.Typer(
     name="landlord",

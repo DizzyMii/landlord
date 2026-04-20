@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import httpx
 
-from landlord.tools.base import ToolResult
+from landlord.legacy.tools.base import ToolResult
 
 
 class WebFetchTool:

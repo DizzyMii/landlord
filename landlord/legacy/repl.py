@@ -7,8 +7,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 import landlord
-from landlord.config import LandlordConfig
-from landlord.dashboard import Dashboard
+from landlord.legacy.config import LandlordConfig
+from landlord.legacy.dashboard import Dashboard
 
 
 class Repl:
@@ -115,6 +115,6 @@ class Repl:
         if not self._last_contracts:
             self._console.print("[dim]No plan \u2014 run a task first.[/dim]")
             return
-        from landlord.renderer import LiveRenderer
+        from landlord.legacy.renderer import LiveRenderer
         temp = LiveRenderer(console=self._console)
         temp.show_plan(self._last_contracts)

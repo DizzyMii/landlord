@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import jsonschema
 
 from landlord.contract import Checkpoint, Contract
-from landlord.llm_client import LLMClient
+from landlord.legacy.llm_client import LLMClient
 
 
 @dataclass

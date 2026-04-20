@@ -1,4 +1,4 @@
-from landlord.config import LandlordConfig
+from landlord.legacy.config import LandlordConfig
 
 
 class TestConfig:

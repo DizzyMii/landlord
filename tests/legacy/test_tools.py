@@ -1,12 +1,12 @@
 import os
 from unittest.mock import AsyncMock, patch
 
-from landlord.tools.base import Tool, ToolResult
-from landlord.tools.file_write import FileWriteTool
-from landlord.tools.file_read import FileReadTool
-from landlord.tools.shell_exec import ShellExecTool
-from landlord.tools.web_fetch import WebFetchTool
-from landlord.tools.web_search import WebSearchTool
+from landlord.legacy.tools.base import Tool, ToolResult
+from landlord.legacy.tools.file_write import FileWriteTool
+from landlord.legacy.tools.file_read import FileReadTool
+from landlord.legacy.tools.shell_exec import ShellExecTool
+from landlord.legacy.tools.web_fetch import WebFetchTool
+from landlord.legacy.tools.web_search import WebSearchTool
 
 
 class TestToolResult:
@@ -106,7 +106,7 @@ class TestWebFetchTool:
         mock_response.status_code = 200
         mock_response.raise_for_status = lambda: None
 
-        with patch("landlord.tools.web_fetch.httpx.AsyncClient") as mock_client_cls:
+        with patch("landlord.legacy.tools.web_fetch.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -125,7 +125,7 @@ class TestWebSearchTool:
         mock_response.json = lambda: {"results": [{"title": "Result 1", "url": "https://example.com"}]}
         mock_response.raise_for_status = lambda: None
 
-        with patch("landlord.tools.web_search.httpx.AsyncClient") as mock_client_cls:
+        with patch("landlord.legacy.tools.web_search.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)

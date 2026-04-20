@@ -1,9 +1,9 @@
 import pytest
 from io import StringIO
 from rich.console import Console
-from landlord.renderer import TenantPanel, LiveRenderer
+from landlord.legacy.renderer import TenantPanel, LiveRenderer
 from landlord.contract import Contract, Checkpoint
-from landlord.dashboard import Dashboard
+from landlord.legacy.dashboard import Dashboard
 
 
 def make_contract(role="worker", tenant_id="abc"):

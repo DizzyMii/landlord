@@ -7,14 +7,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from landlord.config import LandlordConfig
+from landlord.legacy.config import LandlordConfig
 from landlord.contract import Contract
-from landlord.event_bus import Event, EventBus
-from landlord.llm_client import LLMClient
-from landlord.renderer import Renderer
-from landlord.tenant import Tenant
-from landlord.tools import get_all_tools
-from landlord.validator import ValidationResult, Validator
+from landlord.legacy.event_bus import Event, EventBus
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.renderer import Renderer
+from landlord.legacy.tenant import Tenant
+from landlord.legacy.tools import get_all_tools
+from landlord.legacy.validator import ValidationResult, Validator
 
 
 DECOMPOSE_PROMPT = """You are the Landlord, an AI orchestrator. Decompose the following user request into independent sub-tasks that can be executed by isolated worker agents (tenants).

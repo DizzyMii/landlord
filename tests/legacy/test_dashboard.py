@@ -1,5 +1,5 @@
 import pytest
-from landlord.dashboard import Dashboard, MODEL_PRICING
+from landlord.legacy.dashboard import Dashboard, MODEL_PRICING
 
 
 class TestDashboard:

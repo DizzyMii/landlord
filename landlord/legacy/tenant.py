@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from landlord.contract import Checkpoint, Contract
-from landlord.event_bus import Event, EventBus
-from landlord.llm_client import LLMClient
-from landlord.tools.base import Tool
+from landlord.legacy.event_bus import Event, EventBus
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.tools.base import Tool
 
 import re
 

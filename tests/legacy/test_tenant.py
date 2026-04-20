@@ -2,11 +2,11 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from landlord.tenant import Tenant
+from landlord.legacy.tenant import Tenant
 from landlord.contract import Contract, Checkpoint
-from landlord.event_bus import EventBus, Event
-from landlord.llm_client import LLMClient
-from landlord.tools.base import ToolResult
+from landlord.legacy.event_bus import EventBus, Event
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.tools.base import ToolResult
 
 
 def make_contract(**overrides):

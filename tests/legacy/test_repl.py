@@ -2,8 +2,8 @@ import pytest
 from io import StringIO
 from rich.console import Console
 
-from landlord.repl import Repl
-from landlord.config import LandlordConfig
+from landlord.legacy.repl import Repl
+from landlord.legacy.config import LandlordConfig
 
 
 class TestRepl:

@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from landlord.contract import Contract
-from landlord.dashboard import Dashboard
+from landlord.legacy.dashboard import Dashboard
 
 BORDER_COLORS = {
     "pending": "dim",

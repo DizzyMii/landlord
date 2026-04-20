@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from landlord.validator import Validator
+from landlord.legacy.validator import Validator
 from landlord.contract import Checkpoint, Contract
-from landlord.llm_client import LLMClient
+from landlord.legacy.llm_client import LLMClient
 
 
 @pytest.fixture
