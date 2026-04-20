@@ -51,6 +51,9 @@ class AnthropicClient:
         return self._model
 
     def _track(self, response: Any) -> None:
+        # Keep this method synchronous — no awaits — so the four usage
+        # updates run atomically under asyncio when the client is shared
+        # across parallel tenants.
         u = getattr(response, "usage", None)
         if u is None:
             return
@@ -98,7 +101,15 @@ class AnthropicClient:
             tools=[tool],
             tool_choice={"type": "tool", "name": tool["name"]},
         )
-        for block in response.content:
-            if getattr(block, "type", None) == "tool_use" and block.name == tool["name"]:
-                return dict(block.input)
-        raise RuntimeError(f"Model did not call forced tool {tool['name']}")
+        matches = [
+            b for b in response.content
+            if getattr(b, "type", None) == "tool_use" and b.name == tool["name"]
+        ]
+        if not matches:
+            content_types = [getattr(b, "type", "?") for b in response.content]
+            raise RuntimeError(
+                f"Model did not call forced tool {tool['name']!r}; "
+                f"stop_reason={getattr(response, 'stop_reason', '?')!r}, "
+                f"content_types={content_types}"
+            )
+        return dict(matches[0].input)

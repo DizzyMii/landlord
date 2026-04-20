@@ -98,7 +98,10 @@ async def test_call_forced_tool_raises_when_tool_not_called(mocker):
         "description": "Judge.",
         "input_schema": {"type": "object", "properties": {"passed": {"type": "boolean"}}, "required": ["passed"]},
     }
-    with pytest.raises(RuntimeError, match="did not call forced tool"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"did not call forced tool 'judge_checkpoint'.*stop_reason=.*content_types=",
+    ):
         await client.call_forced_tool(
             system=[CachedBlock(text="Judge.", cache=True)],
             messages=[{"role": "user", "content": "x"}],
