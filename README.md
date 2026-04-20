@@ -36,6 +36,24 @@ claude mcp add -s user landlord landlord-mcp
 Restart Claude Code. The five Landlord tools become discoverable; ask the model
 to orchestrate something.
 
+### Trust model
+
+Tenants run with `permission_mode="bypassPermissions"` — the orchestrator is
+autonomous, no human is present to approve prompts. Each tenant has:
+
+- **Write/execute** access to its own sandbox: `<output_dir>/<job_id>/<tenant_id>/`
+- **Read** access to the directory the MCP server was launched from (typically
+  your project root) via `add_dirs=[cwd]`
+- **Inherit-only** access to the rest of your filesystem — tenants can't leave
+  their sandbox for writes unless they target absolute paths inside your project
+  root, in which case writes go through. Claude Code's built-in sensitive-file
+  protection (`.claude/`, system paths) still applies; tenants cannot
+  self-authorize by editing `.claude/settings.json`.
+
+In practice: for tasks that mutate your project code, tenants can do it. For
+tasks that should stay sandboxed, point the MCP server at a scratch directory
+via `LANDLORD_OUTPUT_DIR` and the blast radius is contained there.
+
 ### Watch it work
 
 Every tenant's SDK chatter streams to a tailable log:

@@ -209,6 +209,19 @@ class _SDKSessionAdapter:
         # Tenants inherit the user's ~/.claude/ config (skills, CLAUDE.md, hooks,
         # user memory, personal MCP servers). `skills="all"` makes every user-
         # level skill available to the tenant via the Skill tool.
+        #
+        # Permission model: an autonomous orchestrator has no human to approve
+        # tool-permission prompts, so leaving `permission_mode` at its default
+        # value would deadlock on the first Write/Bash call. We bypass the
+        # prompt layer entirely. Tenants have unrestricted access to their cwd
+        # and to any directory listed in `add_dirs`. The trust boundary is the
+        # orchestrator's `output_dir` and the user's project root — if that's
+        # unacceptable for a given task, run it with a narrower output_dir.
+        #
+        # `add_dirs` grants read access to the process's cwd at launch time
+        # (typically the user's project root when Claude Code spawns the MCP
+        # server via stdio). Without this, tenants can only see their own
+        # sandboxed subdirectory and cannot read the calling repo's code.
         options = self._ClaudeAgentOptions(
             system_prompt=self._system_prompt,
             cwd=str(self._work_dir),
@@ -216,6 +229,8 @@ class _SDKSessionAdapter:
             mcp_servers={"checkpoints": mcp_server},
             setting_sources=["user"],
             skills="all",
+            permission_mode="bypassPermissions",
+            add_dirs=[str(Path.cwd())],
         )
         log_path = Path(self._work_dir) / "session.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
