@@ -157,6 +157,7 @@ class Landlord:
         all_complete = all(t.status == "complete" for t in job.tenants.values())
         new_status = "complete" if all_complete else "partial"
         await self._registry.transition(job.job_id, new_status)
+        job.emit_event(f"job_{new_status}")
 
     async def _run_tenant(
         self,
@@ -177,6 +178,12 @@ class Landlord:
 
         tenant_state.status = "running"
         job.write_sidecar()
+        job.emit_event(
+            "tenant_started",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+            retry_count=tenant_state.retry_count,
+        )
 
         async def checkpoint_handler(cp_name: str, args: dict[str, Any]) -> CheckpointVerdict:
             checkpoint = next(
@@ -197,9 +204,22 @@ class Landlord:
                 shared_path.write_text(json.dumps(args, indent=2, default=str))
                 dep_events[contract.role].set()
                 job.write_sidecar()
+                job.emit_event(
+                    "checkpoint_passed",
+                    tenant_id=contract.tenant_id,
+                    role=contract.role,
+                    checkpoint=cp_name,
+                )
                 return CheckpointVerdict(passed=True, reason=result.explanation)
             # Record the most recent failure so retries get fresh retry_context.
             tenant_state.last_error = f"Checkpoint '{cp_name}' failed: {result.explanation}"
+            job.emit_event(
+                "checkpoint_failed",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                checkpoint=cp_name,
+                reason=result.explanation,
+            )
             return CheckpointVerdict(passed=False, reason=result.explanation)
 
         runner = TenantRunner(
@@ -217,6 +237,12 @@ class Landlord:
         except Exception as e:
             tenant_state.status = "evicted"
             tenant_state.last_error = f"unexpected error: {e}"
+            job.emit_event(
+                "tenant_evicted",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                reason=tenant_state.last_error,
+            )
             await self._maybe_retry(job, tenant_state, dep_events)
             return
 
@@ -226,11 +252,22 @@ class Landlord:
             tenant_state.status = "evicted"
             if tenant_state.last_error is None:
                 tenant_state.last_error = "tenant finished without passing all checkpoints"
+            job.emit_event(
+                "tenant_evicted",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                reason=tenant_state.last_error,
+            )
             await self._maybe_retry(job, tenant_state, dep_events)
             return
 
         tenant_state.status = "complete"
         job.write_sidecar()
+        job.emit_event(
+            "tenant_complete",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+        )
 
     async def _maybe_retry(
         self,
@@ -238,14 +275,29 @@ class Landlord:
         tenant_state: TenantState,
         dep_events: dict[str, asyncio.Event],
     ) -> None:
+        contract = tenant_state.contract
         tenant_state.retry_count += 1
-        if tenant_state.retry_count >= tenant_state.contract.max_retries:
+        if tenant_state.retry_count >= contract.max_retries:
             tenant_state.status = "escalated"
             job.write_sidecar()
+            job.emit_event(
+                "tenant_escalated",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                retry_count=tenant_state.retry_count,
+                last_error=tenant_state.last_error,
+            )
             return
         tenant_state.checkpoints_passed = []
         tenant_state.status = "pending"
         job.write_sidecar()
+        job.emit_event(
+            "tenant_retrying",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+            retry_count=tenant_state.retry_count,
+            last_error=tenant_state.last_error,
+        )
         task = asyncio.create_task(self._run_tenant(job, tenant_state, dep_events))
         tenant_state.task = task
 

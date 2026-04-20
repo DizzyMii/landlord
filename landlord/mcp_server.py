@@ -54,6 +54,11 @@ class LandlordServer:
         resolved_dir.mkdir(parents=True, exist_ok=True)
         plan = await self._landlord.decompose(prompt)
         job = await self._registry.create_job(prompt=prompt, plan=plan, output_dir=resolved_dir)
+        job.emit_event(
+            "job_created",
+            prompt=prompt,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in plan],
+        )
         return {
             "job_id": job.job_id,
             "status": job.status,
@@ -83,6 +88,11 @@ class LandlordServer:
             job = await self._registry.replace_plan(job_id, new_plan)
 
         await self._registry.transition(job_id, "running")
+        job.emit_event(
+            "plan_approved",
+            edited=edits is not None,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in job.plan],
+        )
         await self._landlord.launch(job)
         asyncio.create_task(self._landlord.wait_until_done(job))
         return {"job_id": job_id, "status": "running"}
@@ -135,6 +145,7 @@ class LandlordServer:
             if tenant_state.task is not None and not tenant_state.task.done():
                 tenant_state.task.cancel()
         await self._registry.transition(job_id, "cancelled")
+        job.emit_event("job_cancelled")
         return {"job_id": job_id, "status": "cancelled"}
 
 

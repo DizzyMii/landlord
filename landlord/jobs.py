@@ -85,6 +85,20 @@ class Job:
             json.dumps(self.to_dict(), indent=2, default=str)
         )
 
+    def emit_event(self, event_type: str, **fields: Any) -> None:
+        """Append one structured event to events.jsonl in the job directory.
+
+        Events are the data source for the `landlord watch` TUI and any
+        other downstream consumer. Each line is a self-contained JSON
+        object with an ISO-ish timestamp, the event type, and arbitrary
+        additional fields (tenant_id, role, checkpoint, reason, etc.).
+        """
+        event = {"ts": time.time(), "type": event_type, "job_id": self.job_id}
+        event.update(fields)
+        with (self.output_dir / "events.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, default=str))
+            f.write("\n")
+
 
 class JobRegistry:
     def __init__(self) -> None:

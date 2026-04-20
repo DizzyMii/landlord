@@ -56,10 +56,25 @@ via `LANDLORD_OUTPUT_DIR` and the blast radius is contained there.
 
 ### Watch it work
 
-Every tenant's SDK chatter streams to a tailable log:
+A live terminal UI ships with the package. Run it in any terminal while an
+orchestration is in flight:
+
+```bash
+landlord-watch <job_id>
+```
+
+You'll get rounded-border panels for each tenant with status glyphs, the most
+recent checkpoint events, and a header showing the overall job status and
+elapsed time. It auto-quits when the job reaches a terminal state. The UI
+reads the job's `events.jsonl` + `job.json` + per-tenant `session.log` files
+— no IPC with the MCP server, just tailing files. You can run multiple
+watchers against the same job.
+
+For the raw view, the underlying files are always readable:
 
 ```bash
 tail -f ./landlord-output/<job_id>/job.json                   # orchestration state
+tail -f ./landlord-output/<job_id>/events.jsonl                # structured event stream
 tail -f ./landlord-output/<job_id>/<tenant_id>/session.log    # tenant model activity
 ls  ./landlord-output/<job_id>/shared/                         # dependency artifacts
 ```
