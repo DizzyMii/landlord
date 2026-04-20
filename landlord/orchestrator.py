@@ -151,9 +151,28 @@ class Landlord:
             tenant_state.task = task
 
     async def wait_until_done(self, job: Job) -> None:
-        tasks = [t.task for t in job.tenants.values() if t.task is not None]
-        if tasks:
+        """Wait for every tenant to reach a terminal state (complete or escalated).
+
+        _maybe_retry spawns *new* tasks when a tenant is evicted, so a single
+        asyncio.gather() over the tasks captured at entry would miss retries
+        and mark the job partial before the retry finishes. We re-gather until
+        every tenant is terminal.
+        """
+        terminal_tenant_statuses = {"complete", "escalated"}
+        while True:
+            tasks = [
+                t.task for t in job.tenants.values()
+                if t.task is not None and not t.task.done()
+            ]
+            if not tasks:
+                if all(t.status in terminal_tenant_statuses for t in job.tenants.values()):
+                    break
+                # Some tenant is still pending (between eviction and retry spawn);
+                # yield and re-check.
+                await asyncio.sleep(0.05)
+                continue
             await asyncio.gather(*tasks, return_exceptions=True)
+
         all_complete = all(t.status == "complete" for t in job.tenants.values())
         new_status = "complete" if all_complete else "partial"
         await self._registry.transition(job.job_id, new_status)

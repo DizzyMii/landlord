@@ -315,22 +315,146 @@ def build_default_server() -> LandlordServer:
     )
 
 
+_TERMINAL_JOB_STATUSES = ("complete", "partial", "cancelled")
+
+
+def _format_event_message(event: dict[str, Any]) -> str:
+    """One-line human-readable summary for a progress notification."""
+    t = event.get("type", "?")
+    role = event.get("role")
+    cp = event.get("checkpoint")
+    reason = event.get("reason", "")
+    retry = event.get("retry_count")
+    if t == "job_created":
+        n = len(event.get("plan", []))
+        return f"plan decomposed into {n} tenant{'s' if n != 1 else ''}"
+    if t == "plan_approved":
+        return "plan approved, launching tenants"
+    if t == "tenant_started":
+        suffix = f" (retry {retry})" if retry else ""
+        return f"[{role}] started{suffix}"
+    if t == "checkpoint_passed":
+        return f"[{role}] ✓ {cp}"
+    if t == "checkpoint_failed":
+        return f"[{role}] ✗ {cp} — {reason[:80]}"
+    if t == "tenant_retrying":
+        return f"[{role}] retrying (#{retry})"
+    if t == "tenant_evicted":
+        return f"[{role}] evicted — {reason[:80]}"
+    if t == "tenant_escalated":
+        return f"[{role}] escalated after {retry} retries"
+    if t == "tenant_complete":
+        return f"[{role}] complete"
+    if t.startswith("job_"):
+        return f"job {t[4:]}"
+    return t
+
+
+async def _stream_until_done(
+    server: LandlordServer,
+    ctx: Any,
+    job_id: str,
+    started_event_count: int = 0,
+    poll_interval: float = 0.5,
+) -> dict[str, Any]:
+    """Poll events.jsonl and forward each new event as a progress notification.
+
+    Returns the final get_artifacts response once the job reaches a terminal
+    status. ctx is a FastMCP Context with report_progress(); if the client
+    didn't request progress notifications the calls are effectively no-ops
+    so this is safe either way.
+    """
+    from landlord.watch import load_events
+
+    seen = started_event_count
+    progress = float(started_event_count)
+    while True:
+        job = await server._registry.get(job_id)
+        if job is None:
+            raise ValueError(f"Job vanished mid-run: {job_id}")
+        events = load_events(job.output_dir)
+        for event in events[seen:]:
+            message = _format_event_message(event)
+            progress += 1
+            try:
+                await ctx.report_progress(progress=progress, total=None, message=message)
+            except Exception:
+                pass  # client may not support progress; keep streaming events to disk
+        seen = len(events)
+        if job.status in _TERMINAL_JOB_STATUSES:
+            break
+        await asyncio.sleep(poll_interval)
+
+    # Reuse the standard artifacts accessor so the response shape matches.
+    try:
+        return await server.get_artifacts(job_id=job_id)
+    except ValueError:
+        # get_artifacts refuses on non-terminal statuses, but we just checked.
+        # Fall back to the status response.
+        return await server.get_status(job_id=job_id)
+
+
 def main() -> None:
     """Entry point for the `landlord-mcp` console script. Runs the stdio server."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
 
     server = build_default_server()
     mcp = FastMCP("landlord")
 
     @mcp.tool()
+    async def run_orchestration(
+        ctx: Context,
+        prompt: str,
+        output_dir: str | None = None,
+    ) -> dict:
+        """Decompose, approve, run, and stream live progress — all in one call.
+
+        This is the recommended entry point for most use cases. The tool call
+        stays open for the full orchestration; progress notifications stream
+        plan decomposition, per-tenant starts, checkpoint pass/fail events,
+        retries, and completion directly into Claude Code's tool bubble.
+        Returns the final artifacts once the job reaches a terminal status.
+
+        Use the lower-level tools (start_orchestration, approve_plan, etc.)
+        if you need to inspect the plan before approving or drive the
+        orchestration step-by-step.
+        """
+        await ctx.report_progress(progress=0, total=None, message="decomposing prompt...")
+        started = await server.start_orchestration(prompt=prompt, output_dir=output_dir)
+        plan_roles = [c["role"] for c in started["plan"]]
+        await ctx.report_progress(
+            progress=1, total=None,
+            message=f"plan: {', '.join(plan_roles)}",
+        )
+        await server.approve_plan(job_id=started["job_id"])
+        result = await _stream_until_done(server, ctx, started["job_id"], started_event_count=2)
+        return {
+            "job_id": started["job_id"],
+            "output_dir": started["output_dir"],
+            **result,
+        }
+
+    @mcp.tool()
     async def start_orchestration(prompt: str, output_dir: str | None = None) -> dict:
-        """Decompose the prompt into a plan and return job_id + plan awaiting approval."""
+        """Decompose the prompt into a plan and return job_id + plan awaiting approval.
+
+        Use run_orchestration instead unless you want to inspect or edit the
+        plan before tenants launch.
+        """
         return await server.start_orchestration(prompt=prompt, output_dir=output_dir)
 
     @mcp.tool()
-    async def approve_plan(job_id: str, edits: list[dict] | None = None) -> dict:
-        """Approve (or replace via edits) the plan for job_id and launch tenants."""
-        return await server.approve_plan(job_id=job_id, edits=edits)
+    async def approve_plan(
+        ctx: Context,
+        job_id: str,
+        edits: list[dict] | None = None,
+    ) -> dict:
+        """Approve (or replace via edits) the plan for job_id, then stream progress until done.
+
+        Returns the final artifacts once the job reaches a terminal status.
+        """
+        await server.approve_plan(job_id=job_id, edits=edits)
+        return await _stream_until_done(server, ctx, job_id)
 
     @mcp.tool()
     async def get_status(job_id: str) -> dict:
