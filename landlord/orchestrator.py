@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
 from landlord.jobs import Job, JobRegistry, TenantState
-from landlord.tenant import CheckpointVerdict, TenantRunner
+from landlord.tenant import CheckpointVerdict, PermissionCallback, TenantRunner
 from landlord.validator import Validator
 
 
@@ -141,13 +141,27 @@ class Landlord:
         resolve_launch_order(contracts)
         return contracts
 
-    async def launch(self, job: Job) -> None:
-        """Spawn all tenant tasks. Returns immediately; tasks run in background."""
+    async def launch(
+        self,
+        job: Job,
+        permission_callback: PermissionCallback | None = None,
+    ) -> None:
+        """Spawn all tenant tasks. Returns immediately; tasks run in background.
+
+        If `permission_callback` is supplied, every tenant tool call is routed
+        through it (via the SDK's can_use_tool hook). The callback receives
+        (role, tool_name, tool_input) and returns True to allow / False to
+        deny. Used by the MCP server to forward decisions back to the
+        calling Claude session via Context.elicit. Leave None for fully
+        autonomous (bypassPermissions) tenants.
+        """
         dep_events: dict[str, asyncio.Event] = {c.role: asyncio.Event() for c in job.plan}
         order = resolve_launch_order(job.plan)
         for contract in order:
             tenant_state = job.tenants[contract.tenant_id]
-            task = asyncio.create_task(self._run_tenant(job, tenant_state, dep_events))
+            task = asyncio.create_task(
+                self._run_tenant(job, tenant_state, dep_events, permission_callback)
+            )
             tenant_state.task = task
 
     async def wait_until_done(self, job: Job) -> None:
@@ -183,6 +197,7 @@ class Landlord:
         job: Job,
         tenant_state: TenantState,
         dep_events: dict[str, asyncio.Event],
+        permission_callback: PermissionCallback | None = None,
     ) -> None:
         contract = tenant_state.contract
         for dep_role in contract.depends_on:
@@ -249,6 +264,7 @@ class Landlord:
             model=self._config.tenant_model,
             shared_context=shared_context,
             retry_context=retry_context,
+            permission_callback=permission_callback,
         )
 
         try:
@@ -262,7 +278,7 @@ class Landlord:
                 role=contract.role,
                 reason=tenant_state.last_error,
             )
-            await self._maybe_retry(job, tenant_state, dep_events)
+            await self._maybe_retry(job, tenant_state, dep_events, permission_callback)
             return
 
         required_checkpoint_names = {cp.name for cp in contract.checkpoints}
@@ -277,7 +293,7 @@ class Landlord:
                 role=contract.role,
                 reason=tenant_state.last_error,
             )
-            await self._maybe_retry(job, tenant_state, dep_events)
+            await self._maybe_retry(job, tenant_state, dep_events, permission_callback)
             return
 
         tenant_state.status = "complete"
@@ -293,6 +309,7 @@ class Landlord:
         job: Job,
         tenant_state: TenantState,
         dep_events: dict[str, asyncio.Event],
+        permission_callback: PermissionCallback | None = None,
     ) -> None:
         contract = tenant_state.contract
         tenant_state.retry_count += 1
@@ -317,7 +334,9 @@ class Landlord:
             retry_count=tenant_state.retry_count,
             last_error=tenant_state.last_error,
         )
-        task = asyncio.create_task(self._run_tenant(job, tenant_state, dep_events))
+        task = asyncio.create_task(
+            self._run_tenant(job, tenant_state, dep_events, permission_callback)
+        )
         tenant_state.task = task
 
     def _build_shared_context(self, job: Job, contract: Contract) -> str | None:

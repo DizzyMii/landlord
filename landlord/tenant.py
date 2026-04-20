@@ -55,6 +55,14 @@ def build_system_prompt(
 
 
 CheckpointHandler = Callable[[str, dict[str, Any]], Awaitable["CheckpointVerdict"]]
+PermissionCallback = Callable[[str, str, dict[str, Any]], Awaitable[bool]]
+"""(role, tool_name, tool_input) -> True to allow the call, False to deny.
+
+When supplied to a TenantRunner, this callback is invoked for every tool the
+tenant tries to use. Used by the MCP server to forward decisions back to the
+calling Claude session via Context.elicit, so a human can approve in-flight
+work. Leave as None for fully autonomous (bypassPermissions) tenants.
+"""
 
 
 @dataclass
@@ -93,6 +101,7 @@ class TenantRunner:
         model: str,
         shared_context: str | None = None,
         retry_context: str | None = None,
+        permission_callback: PermissionCallback | None = None,
     ) -> None:
         self._contract = contract
         self._work_dir = work_dir
@@ -101,6 +110,7 @@ class TenantRunner:
         self._model = model
         self._shared_context = shared_context
         self._retry_context = retry_context
+        self._permission_callback = permission_callback
 
     def build_checkpoint_tool_defs(self) -> list[dict[str, Any]]:
         defs = []
@@ -149,6 +159,8 @@ class TenantRunner:
             checkpoint_tools=tool_defs,
             work_dir=self._work_dir,
             model=self._model,
+            role=self._contract.role,
+            permission_callback=self._permission_callback,
         )
 
         last_output: dict | None = None

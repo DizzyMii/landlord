@@ -38,21 +38,31 @@ to orchestrate something.
 
 ### Trust model
 
-Tenants run with `permission_mode="bypassPermissions"` — the orchestrator is
-autonomous, no human is present to approve prompts. Each tenant has:
+Two permission modes, picked automatically based on the entry point:
 
-- **Write/execute** access to its own sandbox: `<output_dir>/<job_id>/<tenant_id>/`
-- **Read** access to the directory the MCP server was launched from (typically
-  your project root) via `add_dirs=[cwd]`
-- **Inherit-only** access to the rest of your filesystem — tenants can't leave
-  their sandbox for writes unless they target absolute paths inside your project
-  root, in which case writes go through. Claude Code's built-in sensitive-file
-  protection (`.claude/`, system paths) still applies; tenants cannot
-  self-authorize by editing `.claude/settings.json`.
+- **Interactive** — the streaming MCP tools (`run_orchestration`,
+  `approve_plan`) forward each tenant tool call back to your Claude Code
+  session via `Context.elicit`. You see a prompt with the tool name +
+  arguments + which tenant is asking, click allow or deny. Tenant blocks
+  until you respond. Falls back to allow if the calling client doesn't
+  support elicitation.
+- **Autonomous** (`bypassPermissions`) — direct Python API calls and the
+  fire-and-forget `start_orchestration` path skip prompts entirely so
+  unattended runs don't deadlock waiting for a human.
 
-In practice: for tasks that mutate your project code, tenants can do it. For
-tasks that should stay sandboxed, point the MCP server at a scratch directory
-via `LANDLORD_OUTPUT_DIR` and the blast radius is contained there.
+In both modes:
+
+- **Write/execute** access to the tenant's own sandbox: `<output_dir>/<job_id>/<tenant_id>/`
+- **Read** access to the directory the MCP server was launched from
+  (typically your project root) via `add_dirs=[cwd]`
+- Tenants can write absolute paths into your project root (interactive
+  mode prompts you per call; autonomous mode lets them through).
+- Claude Code's built-in sensitive-file protection (`.claude/`, system
+  paths) always applies; tenants cannot self-authorize by editing
+  `.claude/settings.json`.
+
+For tasks that should stay sandboxed regardless, point the MCP server at
+a scratch directory via `LANDLORD_OUTPUT_DIR`.
 
 ### Watch it work
 

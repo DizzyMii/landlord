@@ -159,7 +159,7 @@ class FakeSession:
 
 
 def make_factory(sessions_by_role: dict[str, FakeSession]):
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, role=None, **kwargs):
         for role, session in sessions_by_role.items():
             if f"You are a {role}" in system_prompt:
                 return session
@@ -226,7 +226,7 @@ async def test_eviction_retries_and_escalates(tmp_path: Path):
     session_script = [("emit_checkpoint__done", {"x": "bad"})]
     role_counter = {"worker": 0}
 
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
         role_counter["worker"] += 1
         return FakeSession(script=list(session_script))
 
@@ -269,7 +269,7 @@ async def test_successful_retry_passes_after_failure(tmp_path: Path):
     mock_validator = MagicMock(spec=Validator)
     mock_validator.validate_checkpoint = flaky_validate
 
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
         return FakeSession([("emit_checkpoint__done", {"x": "try"})])
 
     registry = JobRegistry()
