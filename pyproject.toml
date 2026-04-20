@@ -30,9 +30,10 @@ legacy = [
 ]
 
 [project.scripts]
+landlord = "landlord.cli:main"
 landlord-mcp = "landlord.mcp_server:main"
 landlord-watch = "landlord.watch:main"
-landlord = "landlord.legacy.cli:app"
+landlord-legacy = "landlord.legacy.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["landlord"]

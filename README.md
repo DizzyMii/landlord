@@ -56,8 +56,26 @@ via `LANDLORD_OUTPUT_DIR` and the blast radius is contained there.
 
 ### Watch it work
 
-A live terminal UI ships with the package. Run it in any terminal while an
-orchestration is in flight:
+The fastest way is to type `landlord` in any terminal. You'll get a sleek
+table of recent jobs with status, age, and prompt; pick one by row number
+or id prefix and you drop straight into the live watch UI.
+
+```bash
+landlord                           # interactive launcher (jobs list → pick → watch)
+landlord ls                        # one-shot list, no prompt
+landlord watch <job_id>            # jump straight to a specific job
+landlord rm <job_id>               # delete a job's output directory
+```
+
+For `landlord` to find your jobs from any directory, set:
+
+```bash
+setx LANDLORD_OUTPUT_DIR "C:/Users/<you>/Downloads/Projects/landlord-output"
+```
+
+The MCP server reads the same env var, so both writer and reader stay in sync.
+
+For a direct invocation that skips the launcher:
 
 ```bash
 landlord-watch <job_id>
