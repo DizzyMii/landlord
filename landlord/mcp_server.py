@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mcp.server.fastmcp import Context
+
 from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Contract
 from landlord.jobs import Job, JobRegistry
@@ -396,7 +398,7 @@ async def _stream_until_done(
 
 def main() -> None:
     """Entry point for the `landlord-mcp` console script. Runs the stdio server."""
-    from mcp.server.fastmcp import Context, FastMCP
+    from mcp.server.fastmcp import FastMCP
 
     server = build_default_server()
     mcp = FastMCP("landlord")
