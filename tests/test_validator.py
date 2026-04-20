@@ -85,7 +85,7 @@ async def test_tier2_fail_returns_reason():
 
 
 @pytest.mark.asyncio
-async def test_judge_call_uses_cached_system_and_forced_tool():
+async def test_judge_call_uses_judge_system_and_forced_tool():
     mock_client = MagicMock()
     mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
 
@@ -97,9 +97,9 @@ async def test_judge_call_uses_cached_system_and_forced_tool():
     )
 
     call = mock_client.call_forced_tool.call_args
-    system_blocks = call.kwargs["system"]
-    assert len(system_blocks) == 1
-    assert system_blocks[0].cache is True
+    system = call.kwargs["system"]
+    assert isinstance(system, str)
+    assert "strict validator" in system
     assert call.kwargs["tool"]["name"] == "judge_checkpoint"
 
 

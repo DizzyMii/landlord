@@ -14,11 +14,24 @@ returns the per-role artifacts.
 pip install -e .
 ```
 
-Set the required environment variable:
+Authenticate against your Claude Pro/Max subscription (no API credits needed):
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+claude setup-token
 ```
+
+Set the resulting token in your environment:
+
+```bash
+# Windows (persistent)
+setx CLAUDE_CODE_OAUTH_TOKEN "<token>"
+
+# bash/zsh
+export CLAUDE_CODE_OAUTH_TOKEN=<token>
+```
+
+(Advanced: if you'd rather pay per-token API usage, set `ANTHROPIC_API_KEY`
+instead — the underlying `claude-agent-sdk` accepts either.)
 
 ## Run the MCP server
 
@@ -27,23 +40,40 @@ landlord-mcp
 ```
 
 This speaks MCP over stdio. Normally you don't run it directly — you point an MCP
-client at it. For Claude Code, add this to your `.claude/mcp.json`:
+client at it. Easiest is the `claude` CLI:
+
+```bash
+claude mcp add -s user landlord <path-to-landlord-mcp-executable>
+```
+
+Or add this to `~/.claude.json` (user scope) manually:
 
 ```json
 {
   "mcpServers": {
     "landlord": {
-      "command": "landlord-mcp",
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-...",
-        "LANDLORD_OUTPUT_DIR": "./landlord-output"
-      }
+      "command": "landlord-mcp"
     }
   }
 }
 ```
 
 Restart Claude Code; the five Landlord tools will be discoverable to the model.
+
+## Tenant inheritance
+
+Tenants spawned by the orchestrator run as Claude Agent SDK sessions with
+`setting_sources=["user"]` and `skills="all"`. That means each tenant inherits:
+
+- All user-level **skills** (invokable via the `Skill` tool)
+- Your user `CLAUDE.md` (instructions/preferences)
+- Your user-level MCP servers and hooks
+- User memory
+
+So a tenant can, for example, invoke `/superpowers:writing-plans` itself if
+your orchestrator decomposes "build feature X" into a tenant that needs to
+plan before coding. Per-contract skill allowlisting is a v2 feature; today
+it's all-or-nothing.
 
 ## Tool surface
 
@@ -59,7 +89,8 @@ Restart Claude Code; the five Landlord tools will be discoverable to the model.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Required. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Required for Pro/Max users (from `claude setup-token`). |
+| `ANTHROPIC_API_KEY` | — | Alternative to OAuth token; pay-per-use API billing. |
 | `LANDLORD_LANDLORD_MODEL` | `claude-opus-4-7` | Decomposition + judge model. |
 | `LANDLORD_TENANT_MODEL` | `claude-sonnet-4-6` | Tenant SDK session model. |
 | `LANDLORD_OUTPUT_DIR` | `./landlord-output` | Root directory for job outputs. |

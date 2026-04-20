@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from landlord.anthropic_client import AnthropicClient
+from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
 from landlord.jobs import JobRegistry
 from landlord.mcp_server import LandlordServer
@@ -25,7 +25,7 @@ class ScriptedSession:
 
 @pytest.mark.asyncio
 async def test_e2e_two_tenant_happy_path(tmp_path: Path):
-    mock_client = MagicMock(spec=AnthropicClient)
+    mock_client = MagicMock(spec=AgentSDKClient)
     call_log = []
 
     async def fake_call_forced_tool(system, messages, tool):

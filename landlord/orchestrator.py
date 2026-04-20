@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from landlord.anthropic_client import AnthropicClient, CachedBlock
+from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
 from landlord.jobs import Job, JobRegistry, TenantState
 from landlord.tenant import CheckpointVerdict, TenantRunner
@@ -116,7 +116,7 @@ class Landlord:
         self,
         config: OrchestratorConfig,
         registry: JobRegistry,
-        client: AnthropicClient,
+        client: AgentSDKClient,
         validator: Validator,
         sdk_session_factory: Callable[..., Any],
     ) -> None:
@@ -128,7 +128,7 @@ class Landlord:
 
     async def decompose(self, prompt: str) -> list[Contract]:
         verdict = await self._client.call_forced_tool(
-            system=[CachedBlock(text=DECOMPOSE_SYSTEM, cache=True)],
+            system=DECOMPOSE_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
             tool=DECOMPOSE_TOOL,
         )

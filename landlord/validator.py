@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import jsonschema
 
-from landlord.anthropic_client import AnthropicClient, CachedBlock
+from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
 
 
@@ -44,7 +44,7 @@ JUDGE_TOOL = {
 
 
 class Validator:
-    def __init__(self, client: AnthropicClient) -> None:
+    def __init__(self, client: AgentSDKClient) -> None:
         self._client = client
 
     async def validate_checkpoint(
@@ -86,7 +86,6 @@ class Validator:
     async def _validate_semantic(
         self, output: dict, checkpoint: Checkpoint, contract: Contract
     ) -> ValidationResult:
-        system = [CachedBlock(text=JUDGE_SYSTEM, cache=True)]
         user_content = (
             f"Contract objective: {contract.objective}\n"
             f"Checkpoint name: {checkpoint.name}\n"
@@ -94,7 +93,7 @@ class Validator:
             f"Output:\n{json.dumps(output, indent=2, default=str)}"
         )
         verdict = await self._client.call_forced_tool(
-            system=system,
+            system=JUDGE_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
             tool=JUDGE_TOOL,
         )

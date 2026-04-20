@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from landlord.anthropic_client import AnthropicClient
+from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Contract
 from landlord.jobs import Job, JobRegistry
 from landlord.orchestrator import (
@@ -206,11 +206,16 @@ class _SDKSessionAdapter:
         mcp_server = self._create_sdk_mcp_server(
             name="landlord_checkpoints", version="1.0.0", tools=sdk_tools
         )
+        # Tenants inherit the user's ~/.claude/ config (skills, CLAUDE.md, hooks,
+        # user memory, personal MCP servers). `skills="all"` makes every user-
+        # level skill available to the tenant via the Skill tool.
         options = self._ClaudeAgentOptions(
             system_prompt=self._system_prompt,
             cwd=str(self._work_dir),
             model=self._model,
             mcp_servers={"checkpoints": mcp_server},
+            setting_sources=["user"],
+            skills="all",
         )
         async with self._ClaudeSDKClient(options=options) as client:
             await client.query(sub_prompt)
@@ -223,7 +228,7 @@ def build_default_server() -> LandlordServer:
     config = OrchestratorConfig.from_env()
     default_output = Path(os.environ.get("LANDLORD_OUTPUT_DIR", "./landlord-output")).resolve()
     default_output.mkdir(parents=True, exist_ok=True)
-    client = AnthropicClient(model=config.landlord_model)
+    client = AgentSDKClient(model=config.landlord_model)
     validator = Validator(client=client)
     registry = JobRegistry()
     landlord = Landlord(
