@@ -1,89 +1,155 @@
-import pytest
+"""Tests for the 2-tier checkpoint validator."""
+from __future__ import annotations
+
 from unittest.mock import AsyncMock, MagicMock
-from landlord.validator import Validator
+
+import pytest
+
 from landlord.contract import Checkpoint, Contract
-from landlord.llm_client import LLMClient
+from landlord.validator import ValidationResult, Validator
 
 
-@pytest.fixture
-def checkpoint():
-    return Checkpoint(
-        name="schema_ready",
-        description="Database schema is defined with at least one table",
-        schema={
-            "type": "object",
-            "properties": {"tables": {"type": "array", "items": {"type": "string"}}},
-            "required": ["tables"],
-        },
-    )
-
-
-@pytest.fixture
-def contract(checkpoint):
+def _contract(role: str = "worker") -> Contract:
     return Contract(
-        role="db_engineer",
-        objective="Design database schema",
-        sub_prompt="Design a database schema",
-        checkpoints=[checkpoint],
-        output_schema={"type": "object"},
+        role=role,
+        objective="obj",
+        sub_prompt="prompt",
+        checkpoints=[],
+        output_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
     )
 
 
-@pytest.fixture
-def mock_llm_client():
-    return MagicMock(spec=LLMClient)
+def _checkpoint(schema: dict | None = None) -> Checkpoint:
+    return Checkpoint(
+        name="done",
+        description="the tenant has finished",
+        schema=schema or {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+    )
 
 
-class TestValidator:
-    async def test_tier1_pass(self, mock_llm_client, checkpoint, contract):
-        validator = Validator(llm_client=mock_llm_client)
-        result = await validator.validate_checkpoint(
-            output={"tables": ["users", "posts"]},
-            checkpoint=checkpoint,
-            contract=contract,
-        )
-        assert result.passed is True
-        assert result.tier == 1
+@pytest.mark.asyncio
+async def test_tier1_schema_validation_passes_and_runs_tier2():
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
 
-    async def test_tier1_fail_missing_field(self, mock_llm_client, checkpoint, contract):
-        validator = Validator(llm_client=mock_llm_client)
-        result = await validator.validate_checkpoint(
-            output={"columns": ["id"]},
-            checkpoint=checkpoint,
-            contract=contract,
-        )
-        assert result.passed is False
-        assert result.tier == 1
-        assert len(result.errors) > 0
+    validator = Validator(client=mock_client)
+    result = await validator.validate_checkpoint(
+        output={"x": "hello"},
+        checkpoint=_checkpoint(),
+        contract=_contract(),
+    )
 
-    async def test_tier1_fail_wrong_type(self, mock_llm_client, checkpoint, contract):
-        validator = Validator(llm_client=mock_llm_client)
-        result = await validator.validate_checkpoint(
-            output={"tables": "not_an_array"},
-            checkpoint=checkpoint,
-            contract=contract,
-        )
-        assert result.passed is False
-        assert result.tier == 1
+    assert isinstance(result, ValidationResult)
+    assert result.passed is True
+    assert result.tier == 2
+    assert "ok" in result.explanation
+    mock_client.call_forced_tool.assert_awaited_once()
 
-    async def test_tier3_semantic_check(self, mock_llm_client, checkpoint, contract):
-        mock_llm_client.chat = AsyncMock(return_value="PASS: The output contains valid table definitions.")
-        validator = Validator(llm_client=mock_llm_client)
-        result = await validator.validate_checkpoint(
-            output={"tables": ["users"]},
-            checkpoint=checkpoint,
-            contract=contract,
-        )
-        assert result.passed is True
-        assert result.tier == 3
 
-    async def test_tier3_semantic_fail(self, mock_llm_client, checkpoint, contract):
-        mock_llm_client.chat = AsyncMock(return_value="FAIL: No tables were actually defined, just empty names.")
-        validator = Validator(llm_client=mock_llm_client)
-        result = await validator.validate_checkpoint(
-            output={"tables": ["users"]},
-            checkpoint=checkpoint,
-            contract=contract,
-        )
-        assert result.passed is False
-        assert result.tier == 3
+@pytest.mark.asyncio
+async def test_tier1_failure_skips_tier2():
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock()
+
+    validator = Validator(client=mock_client)
+    result = await validator.validate_checkpoint(
+        output={"wrong_field": 1},  # missing required "x"
+        checkpoint=_checkpoint(),
+        contract=_contract(),
+    )
+
+    assert result.passed is False
+    assert result.tier == 1
+    assert "Schema validation failed" in result.explanation
+    assert result.errors  # contains jsonschema error message
+    mock_client.call_forced_tool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tier2_fail_returns_reason():
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(
+        return_value={"passed": False, "reason": "output is off-topic"}
+    )
+
+    validator = Validator(client=mock_client)
+    result = await validator.validate_checkpoint(
+        output={"x": "hello"},
+        checkpoint=_checkpoint(),
+        contract=_contract(),
+    )
+
+    assert result.passed is False
+    assert result.tier == 2
+    assert result.explanation == "output is off-topic"
+
+
+@pytest.mark.asyncio
+async def test_judge_call_uses_judge_system_and_forced_tool():
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
+
+    validator = Validator(client=mock_client)
+    await validator.validate_checkpoint(
+        output={"x": "hello"},
+        checkpoint=_checkpoint(),
+        contract=_contract(),
+    )
+
+    call = mock_client.call_forced_tool.call_args
+    system = call.kwargs["system"]
+    assert isinstance(system, str)
+    assert "strict validator" in system
+    assert call.kwargs["tool"]["name"] == "judge_checkpoint"
+
+
+@pytest.mark.asyncio
+async def test_empty_schema_always_passes_tier1():
+    """An empty JSON Schema validates any object — Tier 2 becomes the sole gate."""
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
+
+    validator = Validator(client=mock_client)
+    checkpoint = Checkpoint(name="loose", description="anything goes", schema={})
+    result = await validator.validate_checkpoint(
+        output={"anything": "at all"},
+        checkpoint=checkpoint,
+        contract=_contract(),
+    )
+
+    assert result.passed is True
+    assert result.tier == 2
+    mock_client.call_forced_tool.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_judge_user_message_contains_contract_checkpoint_and_output():
+    """Regression guard: the judge must see objective, checkpoint name, description, and output."""
+    mock_client = MagicMock()
+    mock_client.call_forced_tool = AsyncMock(return_value={"passed": True, "reason": "ok"})
+
+    validator = Validator(client=mock_client)
+    contract = Contract(
+        role="worker",
+        objective="implement a greeter",
+        sub_prompt="do it",
+        checkpoints=[],
+        output_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+    )
+    checkpoint = Checkpoint(
+        name="greeting ready",
+        description="the greeter module prints hello",
+        schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+    )
+    await validator.validate_checkpoint(
+        output={"x": "hello world"},
+        checkpoint=checkpoint,
+        contract=contract,
+    )
+
+    call = mock_client.call_forced_tool.call_args
+    user_content = call.kwargs["messages"][0]["content"]
+    assert "implement a greeter" in user_content
+    assert "greeting ready" in user_content
+    assert "the greeter module prints hello" in user_content
+    assert "hello world" in user_content

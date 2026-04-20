@@ -3,13 +3,13 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from landlord.landlord import Landlord
-from landlord.config import LandlordConfig
+from landlord.legacy.landlord import Landlord
+from landlord.legacy.config import LandlordConfig
 from landlord.contract import Contract, Checkpoint
-from landlord.event_bus import EventBus, Event
-from landlord.llm_client import LLMClient
-from landlord.validator import Validator, ValidationResult
-from landlord.renderer import Renderer
+from landlord.legacy.event_bus import EventBus, Event
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.validator import Validator, ValidationResult
+from landlord.legacy.renderer import Renderer
 
 
 def sample_contracts_json():

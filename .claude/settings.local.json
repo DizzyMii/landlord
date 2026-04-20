@@ -13,7 +13,10 @@
       "Bash(python -m pytest -v)",
       "Bash(python -m pytest tests/test_config.py -v)",
       "Bash(python -m pytest tests/test_llm_client.py -v)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(landlord --help)",
+      "Bash(gh pr create --title 'feat: implement Landlord Framework core' --body ':*)",
+      "Bash(bash:*)"
     ]
   }
 }

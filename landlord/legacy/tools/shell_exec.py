@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from landlord.tools.base import ToolResult
+from landlord.legacy.tools.base import ToolResult
 
 
 class ShellExecTool:

@@ -7,14 +7,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from landlord.config import LandlordConfig
+from landlord.legacy.config import LandlordConfig
 from landlord.contract import Contract
-from landlord.event_bus import Event, EventBus
-from landlord.llm_client import LLMClient
-from landlord.renderer import Renderer
-from landlord.tenant import Tenant
-from landlord.tools import get_all_tools
-from landlord.validator import ValidationResult, Validator
+from landlord.legacy.event_bus import Event, EventBus
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.renderer import Renderer
+from landlord.legacy.tenant import Tenant
+from landlord.legacy.tools import get_all_tools
+from landlord.legacy.validator import ValidationResult, Validator
 
 
 DECOMPOSE_PROMPT = """You are the Landlord, an AI orchestrator. Decompose the following user request into independent sub-tasks that can be executed by isolated worker agents (tenants).
@@ -28,6 +28,12 @@ For each sub-task, provide:
 - tools_allowed: tool whitelist (null if unrestricted)
 - tools_denied: tool blacklist (null if unrestricted)
 - depends_on: list of other role names this tenant needs artifacts from before starting
+
+IMPORTANT rules for checkpoint schemas:
+- Keep schemas SIMPLE and LENIENT. Use basic type checks only (e.g. {{"type": "object", "properties": {{"result": {{"type": "string"}}}}, "required": ["result"]}}).
+- NEVER use "enum", "const", "pattern", or "minItems" in schemas. The schema validates structure, not content.
+- Semantic correctness is checked separately by LLM judgment, not by the schema.
+- Each checkpoint schema must have at least one required property so the tenant knows what to include.
 
 Return ONLY a JSON array of contract objects. No markdown, no explanation.
 
@@ -174,7 +180,12 @@ class Landlord:
             if contract.role in self._dependency_events:
                 self._dependency_events[contract.role].set()
         else:
-            self._renderer.checkpoint_failed(tenant_id, name, result.explanation)
+            detail = result.explanation
+            if result.errors:
+                detail += f" — {'; '.join(result.errors)}"
+            if self._config.verbose:
+                detail += f"\n  Schema: {json.dumps(checkpoint.schema)}\n  Output: {json.dumps(output)}"
+            self._renderer.checkpoint_failed(tenant_id, name, detail)
 
         if future:
             future.set_result(result)

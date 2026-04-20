@@ -1,5 +1,5 @@
 import pytest
-from landlord.event_bus import Event, EventBus
+from landlord.legacy.event_bus import Event, EventBus
 
 
 class TestEvent:

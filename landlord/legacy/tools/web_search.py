@@ -5,7 +5,7 @@ import os
 
 import httpx
 
-from landlord.tools.base import ToolResult
+from landlord.legacy.tools.base import ToolResult
 
 
 class WebSearchTool:

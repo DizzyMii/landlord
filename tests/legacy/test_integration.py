@@ -1,12 +1,12 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from landlord.config import LandlordConfig
-from landlord.event_bus import EventBus
-from landlord.landlord import Landlord
-from landlord.llm_client import LLMClient
-from landlord.renderer import Renderer
-from landlord.validator import Validator, ValidationResult
+from landlord.legacy.config import LandlordConfig
+from landlord.legacy.event_bus import EventBus
+from landlord.legacy.landlord import Landlord
+from landlord.legacy.llm_client import LLMClient
+from landlord.legacy.renderer import Renderer
+from landlord.legacy.validator import Validator, ValidationResult
 
 
 def make_decompose_response():
@@ -63,7 +63,7 @@ class TestFullFlow:
 
         tenant_responses = [
             make_tenant_tool_response("file_write", {"path": "greeting.txt", "content": "Hello!"}),
-            make_tenant_tool_response("emit_checkpoint", {"name": "greeting_written", "output": {"file": "greeting.txt"}}),
+            make_tenant_tool_response("emit_checkpoint__greeting_written", {"file": "greeting.txt"}),
             make_tenant_text_response("Done! I wrote the greeting."),
         ]
 
@@ -79,7 +79,7 @@ class TestFullFlow:
             validator=validator, renderer=renderer,
         )
 
-        with patch("landlord.landlord.LLMClient") as mock_llm_cls:
+        with patch("landlord.legacy.landlord.LLMClient") as mock_llm_cls:
             tenant_llm = MagicMock(spec=LLMClient)
             tenant_llm.chat_with_tools = AsyncMock(side_effect=tenant_responses)
             mock_llm_cls.return_value = tenant_llm
@@ -133,17 +133,17 @@ class TestFullFlow:
             mock = MagicMock(spec=LLMClient)
             if attempt[0] == 1:
                 mock.chat_with_tools = AsyncMock(side_effect=[
-                    make_tenant_tool_response("emit_checkpoint", {"name": "done", "output": {"bad": "data"}}),
+                    make_tenant_tool_response("emit_checkpoint__done", {"bad": "data"}),
                     make_tenant_text_response("Done"),
                 ])
             else:
                 mock.chat_with_tools = AsyncMock(side_effect=[
-                    make_tenant_tool_response("emit_checkpoint", {"name": "done", "output": {"result": "success"}}),
+                    make_tenant_tool_response("emit_checkpoint__done", {"result": "success"}),
                     make_tenant_text_response("Done properly this time"),
                 ])
             return mock
 
-        with patch("landlord.landlord.LLMClient", side_effect=make_tenant_mock):
+        with patch("landlord.legacy.landlord.LLMClient", side_effect=make_tenant_mock):
             await landlord.run("Do a task")
 
         assert renderer.tenant_evicted.called or renderer.checkpoint_failed.called

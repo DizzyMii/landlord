@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from landlord.tools.base import ToolResult
+from landlord.legacy.tools.base import ToolResult
 
 
 class FileReadTool:

@@ -1,159 +1,178 @@
-import json
+"""Tests for the Claude Agent SDK-backed tenant runner."""
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
-from landlord.tenant import Tenant
-from landlord.contract import Contract, Checkpoint
-from landlord.event_bus import EventBus, Event
-from landlord.llm_client import LLMClient
-from landlord.tools.base import ToolResult
+from landlord.contract import Checkpoint, Contract
+from landlord.tenant import (
+    CHECKPOINT_TOOL_PREFIX,
+    CheckpointVerdict,
+    TenantRunner,
+    build_system_prompt,
+    sanitize_tool_name,
+)
 
 
-def make_contract(**overrides):
-    defaults = dict(
-        role="test_worker",
-        objective="Do a test task",
-        sub_prompt="Complete this test task.",
-        checkpoints=[
-            Checkpoint(name="step1", description="First step done", schema={"type": "object"})
-        ],
-        output_schema={"type": "object"},
+def _contract(role: str = "worker", checkpoints: list[Checkpoint] | None = None) -> Contract:
+    return Contract(
+        role=role,
+        objective=f"ship {role}",
+        sub_prompt=f"do the {role} task",
+        checkpoints=checkpoints or [Checkpoint(
+            name="artifact ready",
+            description="the artifact is complete and written to disk",
+            schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        )],
+        output_schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     )
-    defaults.update(overrides)
-    return Contract(**defaults)
 
 
-def make_text_response(content: str):
-    resp = MagicMock()
-    resp.choices = [MagicMock()]
-    resp.choices[0].message.content = content
-    resp.choices[0].message.tool_calls = None
-    resp.choices[0].message.model_dump.return_value = {"role": "assistant", "content": content, "tool_calls": None}
-    resp.usage.prompt_tokens = 10
-    resp.usage.completion_tokens = 5
-    return resp
+def test_sanitize_tool_name_strips_disallowed_chars():
+    assert sanitize_tool_name("artifact ready") == "artifact_ready"
+    assert sanitize_tool_name("step 1: scaffold!") == "step_1__scaffold_"
+    assert sanitize_tool_name("already-ok_name") == "already-ok_name"
 
 
-def make_tool_call_response(name: str, arguments: dict, call_id: str = "call_1"):
-    tool_call = MagicMock()
-    tool_call.id = call_id
-    tool_call.function.name = name
-    tool_call.function.arguments = json.dumps(arguments)
-
-    resp = MagicMock()
-    resp.choices = [MagicMock()]
-    resp.choices[0].message.content = None
-    resp.choices[0].message.tool_calls = [tool_call]
-    resp.choices[0].message.model_dump.return_value = {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}],
-    }
-    resp.usage.prompt_tokens = 10
-    resp.usage.completion_tokens = 5
-    return resp
+def test_build_system_prompt_includes_role_and_checkpoints():
+    c = _contract()
+    prompt = build_system_prompt(contract=c, shared_context=None, retry_context=None)
+    assert "worker" in prompt
+    assert "ship worker" in prompt
+    assert "artifact ready" in prompt
+    assert f"{CHECKPOINT_TOOL_PREFIX}artifact_ready" in prompt
 
 
-class TestTenant:
-    @pytest.fixture
-    def bus(self):
-        return EventBus()
+def test_build_system_prompt_includes_shared_context_when_present():
+    c = _contract()
+    prompt = build_system_prompt(
+        contract=c,
+        shared_context="Dependencies produced:\n  schema.sql: CREATE TABLE ...",
+        retry_context=None,
+    )
+    assert "schema.sql" in prompt
 
-    @pytest.fixture
-    def mock_llm(self):
-        return MagicMock(spec=LLMClient)
 
-    async def test_simple_conversation_completes(self, bus, mock_llm, tmp_work_dir):
-        mock_llm.chat_with_tools = AsyncMock(return_value=make_text_response("Done!"))
-        contract = make_contract()
+def test_build_system_prompt_includes_retry_context_when_present():
+    c = _contract()
+    prompt = build_system_prompt(
+        contract=c,
+        shared_context=None,
+        retry_context="Previous attempt failed: wrong format.",
+    )
+    assert "wrong format" in prompt
 
-        events = []
-        async def capture(event: Event):
-            events.append(event)
-        await bus.subscribe("task_complete", capture)
 
-        tenant = Tenant(
-            contract=contract, llm_client=mock_llm, event_bus=bus,
-            tools={}, work_dir=tmp_work_dir,
-        )
-        await tenant.run()
-        assert any(e.event_type == "task_complete" for e in events)
+class FakeSDKSession:
+    """Stand-in for the Claude Agent SDK session used in tests.
 
-    async def test_tool_call_executes(self, bus, mock_llm, tmp_work_dir):
-        mock_tool = MagicMock()
-        mock_tool.name = "file_write"
-        mock_tool.execute = AsyncMock(return_value=ToolResult(success=True, output="Written"))
+    The orchestrator-under-test drives us via `run(sub_prompt, on_checkpoint)`.
+    We replay a scripted list of checkpoint-tool calls and then return.
+    """
 
-        mock_llm.chat_with_tools = AsyncMock(side_effect=[
-            make_tool_call_response("file_write", {"path": "test.txt", "content": "hi"}),
-            make_text_response("All done!"),
-        ])
+    def __init__(self, scripted_calls: list[tuple[str, dict]]):
+        self._calls = scripted_calls
+        self.calls_made: list[tuple[str, dict]] = []
+        self.last_system_prompt: str | None = None
+        self.last_tool_defs: list | None = None
 
-        contract = make_contract()
-        tenant = Tenant(
-            contract=contract, llm_client=mock_llm, event_bus=bus,
-            tools={"file_write": mock_tool}, work_dir=tmp_work_dir,
-        )
-        await tenant.run()
-        mock_tool.execute.assert_called_once()
+    async def run(self, sub_prompt: str, on_checkpoint):
+        for tool_name, args in self._calls:
+            self.calls_made.append((tool_name, args))
+            result = await on_checkpoint(tool_name, args)
+            if not result.get("ok"):
+                return
 
-    async def test_checkpoint_emits_event(self, bus, mock_llm, tmp_work_dir):
-        checkpoint_events = []
-        async def capture(event: Event):
-            if "future" in event.payload:
-                event.payload["future"].set_result(MagicMock(passed=True))
-            checkpoint_events.append(event)
 
-        await bus.subscribe("checkpoint_reached", capture)
+def _factory(session: FakeSDKSession):
+    def factory(system_prompt, checkpoint_tools, work_dir, model):
+        session.last_system_prompt = system_prompt
+        session.last_tool_defs = checkpoint_tools
+        return session
+    return factory
 
-        mock_llm.chat_with_tools = AsyncMock(side_effect=[
-            make_tool_call_response("emit_checkpoint", {"name": "step1", "output": {"status": "ok"}}),
-            make_text_response("Done!"),
-        ])
 
-        complete_events = []
-        async def capture_complete(event: Event):
-            complete_events.append(event)
-        await bus.subscribe("task_complete", capture_complete)
+@pytest.mark.asyncio
+async def test_tenant_run_passes_checkpoint_and_records_output(tmp_path: Path):
+    c = _contract()
+    fake_session = FakeSDKSession(scripted_calls=[
+        ("emit_checkpoint__artifact_ready", {"path": "result.txt"}),
+    ])
+    handler_calls: list = []
 
-        contract = make_contract()
-        tenant = Tenant(
-            contract=contract, llm_client=mock_llm, event_bus=bus,
-            tools={}, work_dir=tmp_work_dir,
-        )
-        await tenant.run()
+    async def handler(name, args):
+        handler_calls.append((name, args))
+        return CheckpointVerdict(passed=True, reason="ok")
 
-        assert len(checkpoint_events) == 1
-        assert checkpoint_events[0].payload["name"] == "step1"
-        assert len(complete_events) == 1
+    runner = TenantRunner(
+        contract=c,
+        work_dir=tmp_path,
+        checkpoint_handler=handler,
+        sdk_session_factory=_factory(fake_session),
+        model="claude-sonnet-4-6",
+    )
+    result = await runner.run()
 
-    async def test_shared_context_injected(self, bus, mock_llm, tmp_work_dir):
-        mock_llm.chat_with_tools = AsyncMock(return_value=make_text_response("Done"))
-        contract = make_contract()
+    assert result.status == "complete"
+    assert result.last_output == {"path": "result.txt"}
+    assert handler_calls == [("artifact ready", {"path": "result.txt"})]
+    assert fake_session.last_tool_defs is not None
+    assert fake_session.last_tool_defs[0]["name"] == "emit_checkpoint__artifact_ready"
 
-        tenant = Tenant(
-            contract=contract, llm_client=mock_llm, event_bus=bus,
-            tools={}, work_dir=tmp_work_dir,
-            shared_context="## db_engineer\n{\"tables\": [\"users\"]}",
-        )
-        await tenant.run()
 
-        messages = mock_llm.chat_with_tools.call_args[0][0]
-        system_content = " ".join(m.get("content", "") for m in messages if m["role"] == "system")
-        assert "db_engineer" in system_content
+@pytest.mark.asyncio
+async def test_tenant_run_returns_early_when_checkpoint_fails(tmp_path: Path):
+    c = _contract()
+    fake_session = FakeSDKSession(scripted_calls=[
+        ("emit_checkpoint__artifact_ready", {"path": "result.txt"}),
+        ("emit_checkpoint__artifact_ready", {"path": "should-not-run.txt"}),
+    ])
 
-    async def test_task_failed_on_error(self, bus, mock_llm, tmp_work_dir):
-        mock_llm.chat_with_tools = AsyncMock(side_effect=Exception("LLM error"))
+    async def handler(name, args):
+        return CheckpointVerdict(passed=False, reason="wrong format")
 
-        events = []
-        async def capture(event: Event):
-            events.append(event)
-        await bus.subscribe("task_failed", capture)
+    runner = TenantRunner(
+        contract=c,
+        work_dir=tmp_path,
+        checkpoint_handler=handler,
+        sdk_session_factory=_factory(fake_session),
+        model="claude-sonnet-4-6",
+    )
+    result = await runner.run()
 
-        contract = make_contract()
-        tenant = Tenant(
-            contract=contract, llm_client=mock_llm, event_bus=bus,
-            tools={}, work_dir=tmp_work_dir,
-        )
-        await tenant.run()
-        assert any(e.event_type == "task_failed" for e in events)
+    # Runner itself keeps status="complete" because the session exited cleanly;
+    # eviction is decided by the orchestrator based on the failed verdict.
+    assert result.status == "complete"
+    assert result.last_output is None
+    assert fake_session.calls_made == [("emit_checkpoint__artifact_ready", {"path": "result.txt"})]
+
+
+@pytest.mark.asyncio
+async def test_tenant_run_handles_cancellation(tmp_path: Path):
+    c = _contract()
+
+    class HangingSession:
+        async def run(self, sub_prompt, on_checkpoint):
+            await asyncio.sleep(10)
+
+    def factory(**kwargs):
+        return HangingSession()
+
+    async def handler(name, args):
+        return CheckpointVerdict(passed=True, reason="ok")
+
+    runner = TenantRunner(
+        contract=c,
+        work_dir=tmp_path,
+        checkpoint_handler=handler,
+        sdk_session_factory=factory,
+        model="claude-sonnet-4-6",
+    )
+    task = asyncio.create_task(runner.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    result = await task
+    assert result.status == "evicted"
+    assert result.reason == "cancelled"

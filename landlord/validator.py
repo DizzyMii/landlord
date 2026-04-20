@@ -1,4 +1,4 @@
-"""Tiered validation pipeline for checkpoint outputs."""
+"""Two-tier checkpoint validator: JSON Schema + structured LLM judge."""
 
 from __future__ import annotations
 
@@ -7,25 +7,45 @@ from dataclasses import dataclass, field
 
 import jsonschema
 
+from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
-from landlord.llm_client import LLMClient
 
 
 @dataclass
 class ValidationResult:
-    """Result of validating a checkpoint output."""
-
     passed: bool
     tier: int
     explanation: str
     errors: list[str] = field(default_factory=list)
 
 
-class Validator:
-    """3-tier checkpoint validation: schema -> static analysis -> LLM judgment."""
+JUDGE_SYSTEM = (
+    "You are a strict validator. You receive a checkpoint output from a worker agent "
+    "along with the contract objective and the checkpoint description. You must decide "
+    "whether the output meets the intent of the checkpoint and call the judge_checkpoint "
+    "tool with your verdict. Be lenient on form, strict on substance: if the worker "
+    "produced something that factually satisfies the checkpoint description, pass. If it "
+    "is missing required work, off-topic, or trivially incorrect, fail with a concrete "
+    "reason."
+)
 
-    def __init__(self, llm_client: LLMClient) -> None:
-        self._llm_client = llm_client
+JUDGE_TOOL = {
+    "name": "judge_checkpoint",
+    "description": "Record whether the checkpoint output meets the requirements.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "passed": {"type": "boolean"},
+            "reason": {"type": "string"},
+        },
+        "required": ["passed", "reason"],
+    },
+}
+
+
+class Validator:
+    def __init__(self, client: AgentSDKClient) -> None:
+        self._client = client
 
     async def validate_checkpoint(
         self,
@@ -33,50 +53,52 @@ class Validator:
         checkpoint: Checkpoint,
         contract: Contract,
     ) -> ValidationResult:
-        # Tier 1: JSON Schema validation
+        """Validate a checkpoint output through Tier 1 (JSON Schema) and,
+        if that passes, Tier 2 (structured LLM judge).
+
+        Raises:
+            RuntimeError: if the judge model does not emit the forced
+                judge_checkpoint tool (e.g., a safety refusal or an API
+                error). Callers (e.g., the orchestrator) must handle
+                this — it is intentionally not converted to a passed=False
+                result so that "judge unavailable" can be distinguished
+                from "judge said fail".
+        """
         tier1 = self._validate_schema(output, checkpoint)
         if not tier1.passed:
             return tier1
-
-        # Tier 3: LLM semantic judgment (when checkpoint has a description)
-        if checkpoint.description:
-            try:
-                return await self._validate_semantic(output, checkpoint, contract)
-            except (AttributeError, TypeError):
-                return tier1
-
-        return tier1
+        return await self._validate_semantic(output, checkpoint, contract)
 
     def _validate_schema(self, output: dict, checkpoint: Checkpoint) -> ValidationResult:
-        """Tier 1: Validate output against checkpoint JSON Schema."""
         try:
             jsonschema.validate(instance=output, schema=checkpoint.schema)
-            return ValidationResult(passed=True, tier=1, explanation="Schema validation passed")
+            return ValidationResult(
+                passed=True, tier=1, explanation="Schema validation passed"
+            )
         except jsonschema.ValidationError as e:
             return ValidationResult(
                 passed=False,
                 tier=1,
-                explanation="Schema validation failed",
+                explanation=f"Schema validation failed: {e.message}",
                 errors=[e.message],
             )
 
     async def _validate_semantic(
         self, output: dict, checkpoint: Checkpoint, contract: Contract
     ) -> ValidationResult:
-        """Tier 3: LLM judges semantic correctness."""
-        prompt = (
-            f"You are validating a checkpoint output for a worker agent.\n\n"
+        user_content = (
             f"Contract objective: {contract.objective}\n"
-            f"Checkpoint: {checkpoint.name}\n"
+            f"Checkpoint name: {checkpoint.name}\n"
             f"Checkpoint description: {checkpoint.description}\n"
-            f"Output: {json.dumps(output, indent=2)}\n\n"
-            f"Does this output satisfy the checkpoint requirements?\n"
-            f"Answer with PASS or FAIL followed by a brief explanation."
+            f"Output:\n{json.dumps(output, indent=2, default=str)}"
         )
-        response = await self._llm_client.chat([{"role": "user", "content": prompt}])
-        passed = response.strip().upper().startswith("PASS")
+        verdict = await self._client.call_forced_tool(
+            system=JUDGE_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+            tool=JUDGE_TOOL,
+        )
         return ValidationResult(
-            passed=passed,
-            tier=3,
-            explanation=response.strip(),
+            passed=bool(verdict.get("passed", False)),
+            tier=2,
+            explanation=str(verdict.get("reason", "")),
         )
