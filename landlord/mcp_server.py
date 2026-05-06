@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mcp.server.fastmcp import Context
+from pydantic import BaseModel, Field
+
 from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Contract
 from landlord.jobs import Job, JobRegistry
@@ -54,10 +57,17 @@ class LandlordServer:
         resolved_dir.mkdir(parents=True, exist_ok=True)
         plan = await self._landlord.decompose(prompt)
         job = await self._registry.create_job(prompt=prompt, plan=plan, output_dir=resolved_dir)
+        job.emit_event(
+            "job_created",
+            prompt=prompt,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in plan],
+        )
         return {
             "job_id": job.job_id,
             "status": job.status,
             "plan": [c.model_dump() for c in job.plan],
+            "output_dir": str(job.output_dir),
+            "watch_command": f"landlord-watch {job.job_id} --output-dir {str(resolved_dir)!r}",
         }
 
     async def approve_plan(
@@ -83,6 +93,11 @@ class LandlordServer:
             job = await self._registry.replace_plan(job_id, new_plan)
 
         await self._registry.transition(job_id, "running")
+        job.emit_event(
+            "plan_approved",
+            edited=edits is not None,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in job.plan],
+        )
         await self._landlord.launch(job)
         asyncio.create_task(self._landlord.wait_until_done(job))
         return {"job_id": job_id, "status": "running"}
@@ -96,6 +111,7 @@ class LandlordServer:
             "status": job.status,
             "plan": [c.model_dump() for c in job.plan],
             "tenants": [t.to_dict() for t in job.tenants.values()],
+            "output_dir": str(job.output_dir),
         }
 
     async def get_artifacts(self, job_id: str) -> dict[str, Any]:
@@ -135,6 +151,7 @@ class LandlordServer:
             if tenant_state.task is not None and not tenant_state.task.done():
                 tenant_state.task.cancel()
         await self._registry.transition(job_id, "cancelled")
+        job.emit_event("job_cancelled")
         return {"job_id": job_id, "status": "cancelled"}
 
 
@@ -147,20 +164,26 @@ def _build_sdk_session_factory() -> Any:
     from claude_agent_sdk import (
         ClaudeAgentOptions,
         ClaudeSDKClient,
+        PermissionResultAllow,
+        PermissionResultDeny,
         create_sdk_mcp_server,
         tool,
     )
 
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, role=None, permission_callback=None):
         return _SDKSessionAdapter(
             system_prompt=system_prompt,
             checkpoint_tools=checkpoint_tools,
             work_dir=work_dir,
             model=model,
+            role=role,
+            permission_callback=permission_callback,
             ClaudeAgentOptions=ClaudeAgentOptions,
             ClaudeSDKClient=ClaudeSDKClient,
             create_sdk_mcp_server=create_sdk_mcp_server,
             tool=tool,
+            PermissionResultAllow=PermissionResultAllow,
+            PermissionResultDeny=PermissionResultDeny,
         )
     return factory
 
@@ -181,15 +204,23 @@ class _SDKSessionAdapter:
         ClaudeSDKClient,
         create_sdk_mcp_server,
         tool,
+        role=None,
+        permission_callback=None,
+        PermissionResultAllow=None,
+        PermissionResultDeny=None,
     ):
         self._system_prompt = system_prompt
         self._checkpoint_tools = checkpoint_tools
         self._work_dir = work_dir
         self._model = model
+        self._role = role or "tenant"
+        self._permission_callback = permission_callback
         self._ClaudeAgentOptions = ClaudeAgentOptions
         self._ClaudeSDKClient = ClaudeSDKClient
         self._create_sdk_mcp_server = create_sdk_mcp_server
         self._tool = tool
+        self._PermissionResultAllow = PermissionResultAllow
+        self._PermissionResultDeny = PermissionResultDeny
 
     async def run(self, sub_prompt, on_checkpoint):
         sdk_tools = []
@@ -209,14 +240,62 @@ class _SDKSessionAdapter:
         # Tenants inherit the user's ~/.claude/ config (skills, CLAUDE.md, hooks,
         # user memory, personal MCP servers). `skills="all"` makes every user-
         # level skill available to the tenant via the Skill tool.
-        options = self._ClaudeAgentOptions(
+        #
+        # Permission model: two paths.
+        #
+        # 1. Interactive (permission_callback supplied) — every tool call goes
+        #    through can_use_tool, which forwards the decision to the calling
+        #    Claude session via Context.elicit. The user sees a prompt with the
+        #    tool name + args and clicks allow/deny. Used by the streaming MCP
+        #    tools (run_orchestration, approve_plan).
+        # 2. Autonomous (no permission_callback) — bypassPermissions skips the
+        #    prompt layer entirely so the tenant doesn't deadlock waiting for a
+        #    human that isn't there. Used by start_orchestration's fire-and-
+        #    forget path and by direct Python API callers.
+        #
+        # `add_dirs` grants read access to the process's cwd at launch time
+        # (typically the user's project root when Claude Code spawns the MCP
+        # server via stdio). Without this, tenants can only see their own
+        # sandboxed subdirectory and cannot read the calling repo's code.
+        common_options = dict(
             system_prompt=self._system_prompt,
             cwd=str(self._work_dir),
             model=self._model,
             mcp_servers={"checkpoints": mcp_server},
             setting_sources=["user"],
             skills="all",
+            add_dirs=[str(Path.cwd())],
         )
+        if self._permission_callback is not None:
+            assert self._PermissionResultAllow is not None
+            assert self._PermissionResultDeny is not None
+            cb = self._permission_callback
+            role = self._role
+            allow_cls = self._PermissionResultAllow
+            deny_cls = self._PermissionResultDeny
+
+            async def can_use_tool(tool_name, tool_input, _ctx):
+                # Forward to the orchestrator-supplied callback. On any error
+                # (e.g., the calling client doesn't support elicitation, or the
+                # call times out), default to allow so the tenant doesn't
+                # deadlock — matches the autonomous-mode behaviour.
+                try:
+                    allowed = await cb(role, tool_name, tool_input)
+                except Exception:
+                    allowed = True
+                if allowed:
+                    return allow_cls(updated_input=tool_input)
+                return deny_cls(message=f"User denied {tool_name} for tenant '{role}'")
+
+            options = self._ClaudeAgentOptions(
+                **common_options,
+                can_use_tool=can_use_tool,
+            )
+        else:
+            options = self._ClaudeAgentOptions(
+                **common_options,
+                permission_mode="bypassPermissions",
+            )
         log_path = Path(self._work_dir) / "session.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8", buffering=1) as log:
@@ -286,6 +365,153 @@ def build_default_server() -> LandlordServer:
     )
 
 
+_TERMINAL_JOB_STATUSES = ("complete", "partial", "cancelled")
+
+
+class _PermissionDecision(BaseModel):
+    """Schema for the elicitation prompt that asks the user to allow/deny a tenant tool call.
+
+    The form deliberately has only an optional `notes` field so the user can
+    submit with a single click. The accept/decline action itself carries the
+    decision — Accept means allow, Decline means deny.
+    """
+
+    notes: str = Field(
+        default="",
+        description="Optional notes about this decision (not required).",
+    )
+
+
+# Tools that should never trigger an elicitation prompt. The checkpoint tools
+# are how the tenant communicates back to the orchestrator; denying them just
+# breaks the orchestration. Filesystem-read tools are read-only and very high
+# volume — prompting on every Read/Grep/Glob makes the UX unusable.
+_AUTO_APPROVE_PREFIXES = ("mcp__checkpoints__",)
+_AUTO_APPROVE_TOOLS = frozenset({
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
+    "TodoRead", "TodoWrite",  # local-only state, no I/O
+})
+
+
+def _is_auto_approved(tool_name: str) -> bool:
+    if tool_name in _AUTO_APPROVE_TOOLS:
+        return True
+    return any(tool_name.startswith(p) for p in _AUTO_APPROVE_PREFIXES)
+
+
+def _build_permission_callback(ctx: Any):
+    """Construct a PermissionCallback that forwards tenant tool decisions to
+    the calling Claude session via Context.elicit. Auto-approves checkpoint
+    tools (orchestration infrastructure) and read-only tools (high volume,
+    low risk). Falls back to allow if the client doesn't support elicitation
+    or any other error occurs."""
+    async def callback(role: str, tool_name: str, tool_input: dict[str, Any]) -> bool:
+        if _is_auto_approved(tool_name):
+            return True
+
+        # Truncate the input preview so the prompt stays readable.
+        try:
+            input_str = json.dumps(tool_input, default=str)
+        except Exception:
+            input_str = repr(tool_input)
+        if len(input_str) > 400:
+            input_str = input_str[:397] + "..."
+
+        message = (
+            f"Tenant '{role}' wants to use tool '{tool_name}'.\n\n"
+            f"Input: {input_str}\n\n"
+            f"Click Accept to allow, Decline to deny."
+        )
+        try:
+            result = await ctx.elicit(message=message, schema=_PermissionDecision)
+            action = getattr(result, "action", None)
+            if action == "accept":
+                return True
+            if action in ("decline", "cancel"):
+                return False
+            # Unknown action — default allow so the orchestration doesn't deadlock.
+            return True
+        except Exception:
+            return True
+    return callback
+
+
+def _format_event_message(event: dict[str, Any]) -> str:
+    """One-line human-readable summary for a progress notification."""
+    t = event.get("type", "?")
+    role = event.get("role")
+    cp = event.get("checkpoint")
+    reason = event.get("reason", "")
+    retry = event.get("retry_count")
+    if t == "job_created":
+        n = len(event.get("plan", []))
+        return f"plan decomposed into {n} tenant{'s' if n != 1 else ''}"
+    if t == "plan_approved":
+        return "plan approved, launching tenants"
+    if t == "tenant_started":
+        suffix = f" (retry {retry})" if retry else ""
+        return f"[{role}] started{suffix}"
+    if t == "checkpoint_passed":
+        return f"[{role}] ✓ {cp}"
+    if t == "checkpoint_failed":
+        return f"[{role}] ✗ {cp} — {reason[:80]}"
+    if t == "tenant_retrying":
+        return f"[{role}] retrying (#{retry})"
+    if t == "tenant_evicted":
+        return f"[{role}] evicted — {reason[:80]}"
+    if t == "tenant_escalated":
+        return f"[{role}] escalated after {retry} retries"
+    if t == "tenant_complete":
+        return f"[{role}] complete"
+    if t.startswith("job_"):
+        return f"job {t[4:]}"
+    return t
+
+
+async def _stream_until_done(
+    server: LandlordServer,
+    ctx: Any,
+    job_id: str,
+    started_event_count: int = 0,
+    poll_interval: float = 0.5,
+) -> dict[str, Any]:
+    """Poll events.jsonl and forward each new event as a progress notification.
+
+    Returns the final get_artifacts response once the job reaches a terminal
+    status. ctx is a FastMCP Context with report_progress(); if the client
+    didn't request progress notifications the calls are effectively no-ops
+    so this is safe either way.
+    """
+    from landlord.watch import load_events
+
+    seen = started_event_count
+    progress = float(started_event_count)
+    while True:
+        job = await server._registry.get(job_id)
+        if job is None:
+            raise ValueError(f"Job vanished mid-run: {job_id}")
+        events = load_events(job.output_dir)
+        for event in events[seen:]:
+            message = _format_event_message(event)
+            progress += 1
+            try:
+                await ctx.report_progress(progress=progress, total=None, message=message)
+            except Exception:
+                pass  # client may not support progress; keep streaming events to disk
+        seen = len(events)
+        if job.status in _TERMINAL_JOB_STATUSES:
+            break
+        await asyncio.sleep(poll_interval)
+
+    # Reuse the standard artifacts accessor so the response shape matches.
+    try:
+        return await server.get_artifacts(job_id=job_id)
+    except ValueError:
+        # get_artifacts refuses on non-terminal statuses, but we just checked.
+        # Fall back to the status response.
+        return await server.get_status(job_id=job_id)
+
+
 def main() -> None:
     """Entry point for the `landlord-mcp` console script. Runs the stdio server."""
     from mcp.server.fastmcp import FastMCP
@@ -294,14 +520,97 @@ def main() -> None:
     mcp = FastMCP("landlord")
 
     @mcp.tool()
+    async def run_orchestration(
+        ctx: Context,
+        prompt: str,
+        output_dir: str | None = None,
+    ) -> dict:
+        """Decompose, approve, run, and stream live progress — all in one call.
+
+        This is the recommended entry point for most use cases. The tool call
+        stays open for the full orchestration; progress notifications stream
+        plan decomposition, per-tenant starts, checkpoint pass/fail events,
+        retries, and completion directly into Claude Code's tool bubble.
+        Returns the final artifacts once the job reaches a terminal status.
+
+        Use the lower-level tools (start_orchestration, approve_plan, etc.)
+        if you need to inspect the plan before approving or drive the
+        orchestration step-by-step.
+        """
+        await ctx.report_progress(progress=0, total=None, message="decomposing prompt...")
+        started = await server.start_orchestration(prompt=prompt, output_dir=output_dir)
+        plan_roles = [c["role"] for c in started["plan"]]
+        await ctx.report_progress(
+            progress=1, total=None,
+            message=f"plan: {', '.join(plan_roles)}",
+        )
+        # Approve manually so we can pass a permission callback into launch.
+        job = await server._registry.get(started["job_id"])
+        await server._registry.transition(started["job_id"], "running")
+        job.emit_event(
+            "plan_approved",
+            edited=False,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in job.plan],
+        )
+        permission_cb = _build_permission_callback(ctx)
+        await server._landlord.launch(job, permission_callback=permission_cb)
+        asyncio.create_task(server._landlord.wait_until_done(job))
+        result = await _stream_until_done(server, ctx, started["job_id"], started_event_count=2)
+        return {
+            "job_id": started["job_id"],
+            "output_dir": started["output_dir"],
+            **result,
+        }
+
+    @mcp.tool()
     async def start_orchestration(prompt: str, output_dir: str | None = None) -> dict:
-        """Decompose the prompt into a plan and return job_id + plan awaiting approval."""
+        """Decompose the prompt into a plan and return job_id + plan awaiting approval.
+
+        Use run_orchestration instead unless you want to inspect or edit the
+        plan before tenants launch.
+        """
         return await server.start_orchestration(prompt=prompt, output_dir=output_dir)
 
     @mcp.tool()
-    async def approve_plan(job_id: str, edits: list[dict] | None = None) -> dict:
-        """Approve (or replace via edits) the plan for job_id and launch tenants."""
-        return await server.approve_plan(job_id=job_id, edits=edits)
+    async def approve_plan(
+        ctx: Context,
+        job_id: str,
+        edits: list[dict] | None = None,
+    ) -> dict:
+        """Approve (or replace via edits) the plan for job_id, then stream progress until done.
+
+        Tenant tool calls are forwarded to you via Context.elicit — you'll see
+        an "allow / deny" prompt for each Write/Bash/etc the tenant attempts.
+        Returns the final artifacts once the job reaches a terminal status.
+        """
+        # Replicate server.approve_plan's preconditions/edits handling but
+        # plumb a permission callback through launch so we can route tool
+        # decisions back to the user.
+        job = await server._registry.get(job_id)
+        if job is None:
+            raise ValueError(f"Unknown job_id: {job_id}")
+        if job.status != "awaiting_approval":
+            raise ValueError(f"Job {job_id} is not awaiting approval (status={job.status})")
+        if edits is not None:
+            try:
+                new_plan = [Contract(**raw) for raw in edits]
+            except Exception as e:
+                raise ValueError(f"Invalid edited plan: {e}") from e
+            try:
+                resolve_launch_order(new_plan)
+            except DependencyCycleError as e:
+                raise ValueError(f"Edited plan has a dependency cycle: {e}") from e
+            job = await server._registry.replace_plan(job_id, new_plan)
+        await server._registry.transition(job_id, "running")
+        job.emit_event(
+            "plan_approved",
+            edited=edits is not None,
+            plan=[{"role": c.role, "depends_on": list(c.depends_on)} for c in job.plan],
+        )
+        permission_cb = _build_permission_callback(ctx)
+        await server._landlord.launch(job, permission_callback=permission_cb)
+        asyncio.create_task(server._landlord.wait_until_done(job))
+        return await _stream_until_done(server, ctx, job_id)
 
     @mcp.tool()
     async def get_status(job_id: str) -> dict:

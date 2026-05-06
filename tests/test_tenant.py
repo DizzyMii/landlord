@@ -87,7 +87,7 @@ class FakeSDKSession:
 
 
 def _factory(session: FakeSDKSession):
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
         session.last_system_prompt = system_prompt
         session.last_tool_defs = checkpoint_tools
         return session
@@ -147,6 +147,59 @@ async def test_tenant_run_returns_early_when_checkpoint_fails(tmp_path: Path):
     assert result.status == "complete"
     assert result.last_output is None
     assert fake_session.calls_made == [("emit_checkpoint__artifact_ready", {"path": "result.txt"})]
+
+
+@pytest.mark.asyncio
+async def test_tenant_run_forwards_permission_callback_to_factory(tmp_path: Path):
+    """When TenantRunner is given a permission_callback, the factory must
+    receive it so the SDK adapter can wire it into can_use_tool."""
+    captured = {}
+
+    class _NullSession:
+        async def run(self, sub_prompt, on_checkpoint):
+            return
+
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
+        captured.update(kwargs)
+        return _NullSession()
+
+    async def my_callback(role, tool_name, tool_input):
+        return True
+
+    runner = TenantRunner(
+        contract=_contract(),
+        work_dir=tmp_path,
+        checkpoint_handler=lambda *_: None,  # never invoked since session does nothing
+        sdk_session_factory=factory,
+        model="claude-sonnet-4-6",
+        permission_callback=my_callback,
+    )
+    await runner.run()
+    assert captured.get("permission_callback") is my_callback
+    assert captured.get("role") == "worker"
+
+
+@pytest.mark.asyncio
+async def test_tenant_run_passes_none_callback_when_not_supplied(tmp_path: Path):
+    captured = {}
+
+    class _NullSession:
+        async def run(self, sub_prompt, on_checkpoint):
+            return
+
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
+        captured.update(kwargs)
+        return _NullSession()
+
+    runner = TenantRunner(
+        contract=_contract(),
+        work_dir=tmp_path,
+        checkpoint_handler=lambda *_: None,
+        sdk_session_factory=factory,
+        model="claude-sonnet-4-6",
+    )
+    await runner.run()
+    assert captured.get("permission_callback") is None
 
 
 @pytest.mark.asyncio

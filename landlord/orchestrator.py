@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 from landlord.agent_sdk_client import AgentSDKClient
 from landlord.contract import Checkpoint, Contract
 from landlord.jobs import Job, JobRegistry, TenantState
-from landlord.tenant import CheckpointVerdict, TenantRunner
+from landlord.tenant import CheckpointVerdict, PermissionCallback, TenantRunner
 from landlord.validator import Validator
 
 
@@ -141,28 +141,63 @@ class Landlord:
         resolve_launch_order(contracts)
         return contracts
 
-    async def launch(self, job: Job) -> None:
-        """Spawn all tenant tasks. Returns immediately; tasks run in background."""
+    async def launch(
+        self,
+        job: Job,
+        permission_callback: PermissionCallback | None = None,
+    ) -> None:
+        """Spawn all tenant tasks. Returns immediately; tasks run in background.
+
+        If `permission_callback` is supplied, every tenant tool call is routed
+        through it (via the SDK's can_use_tool hook). The callback receives
+        (role, tool_name, tool_input) and returns True to allow / False to
+        deny. Used by the MCP server to forward decisions back to the
+        calling Claude session via Context.elicit. Leave None for fully
+        autonomous (bypassPermissions) tenants.
+        """
         dep_events: dict[str, asyncio.Event] = {c.role: asyncio.Event() for c in job.plan}
         order = resolve_launch_order(job.plan)
         for contract in order:
             tenant_state = job.tenants[contract.tenant_id]
-            task = asyncio.create_task(self._run_tenant(job, tenant_state, dep_events))
+            task = asyncio.create_task(
+                self._run_tenant(job, tenant_state, dep_events, permission_callback)
+            )
             tenant_state.task = task
 
     async def wait_until_done(self, job: Job) -> None:
-        tasks = [t.task for t in job.tenants.values() if t.task is not None]
-        if tasks:
+        """Wait for every tenant to reach a terminal state (complete or escalated).
+
+        _maybe_retry spawns *new* tasks when a tenant is evicted, so a single
+        asyncio.gather() over the tasks captured at entry would miss retries
+        and mark the job partial before the retry finishes. We re-gather until
+        every tenant is terminal.
+        """
+        terminal_tenant_statuses = {"complete", "escalated"}
+        while True:
+            tasks = [
+                t.task for t in job.tenants.values()
+                if t.task is not None and not t.task.done()
+            ]
+            if not tasks:
+                if all(t.status in terminal_tenant_statuses for t in job.tenants.values()):
+                    break
+                # Some tenant is still pending (between eviction and retry spawn);
+                # yield and re-check.
+                await asyncio.sleep(0.05)
+                continue
             await asyncio.gather(*tasks, return_exceptions=True)
+
         all_complete = all(t.status == "complete" for t in job.tenants.values())
         new_status = "complete" if all_complete else "partial"
         await self._registry.transition(job.job_id, new_status)
+        job.emit_event(f"job_{new_status}")
 
     async def _run_tenant(
         self,
         job: Job,
         tenant_state: TenantState,
         dep_events: dict[str, asyncio.Event],
+        permission_callback: PermissionCallback | None = None,
     ) -> None:
         contract = tenant_state.contract
         for dep_role in contract.depends_on:
@@ -177,6 +212,12 @@ class Landlord:
 
         tenant_state.status = "running"
         job.write_sidecar()
+        job.emit_event(
+            "tenant_started",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+            retry_count=tenant_state.retry_count,
+        )
 
         async def checkpoint_handler(cp_name: str, args: dict[str, Any]) -> CheckpointVerdict:
             checkpoint = next(
@@ -197,9 +238,22 @@ class Landlord:
                 shared_path.write_text(json.dumps(args, indent=2, default=str))
                 dep_events[contract.role].set()
                 job.write_sidecar()
+                job.emit_event(
+                    "checkpoint_passed",
+                    tenant_id=contract.tenant_id,
+                    role=contract.role,
+                    checkpoint=cp_name,
+                )
                 return CheckpointVerdict(passed=True, reason=result.explanation)
             # Record the most recent failure so retries get fresh retry_context.
             tenant_state.last_error = f"Checkpoint '{cp_name}' failed: {result.explanation}"
+            job.emit_event(
+                "checkpoint_failed",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                checkpoint=cp_name,
+                reason=result.explanation,
+            )
             return CheckpointVerdict(passed=False, reason=result.explanation)
 
         runner = TenantRunner(
@@ -210,6 +264,7 @@ class Landlord:
             model=self._config.tenant_model,
             shared_context=shared_context,
             retry_context=retry_context,
+            permission_callback=permission_callback,
         )
 
         try:
@@ -217,7 +272,13 @@ class Landlord:
         except Exception as e:
             tenant_state.status = "evicted"
             tenant_state.last_error = f"unexpected error: {e}"
-            await self._maybe_retry(job, tenant_state, dep_events)
+            job.emit_event(
+                "tenant_evicted",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                reason=tenant_state.last_error,
+            )
+            await self._maybe_retry(job, tenant_state, dep_events, permission_callback)
             return
 
         required_checkpoint_names = {cp.name for cp in contract.checkpoints}
@@ -226,27 +287,56 @@ class Landlord:
             tenant_state.status = "evicted"
             if tenant_state.last_error is None:
                 tenant_state.last_error = "tenant finished without passing all checkpoints"
-            await self._maybe_retry(job, tenant_state, dep_events)
+            job.emit_event(
+                "tenant_evicted",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                reason=tenant_state.last_error,
+            )
+            await self._maybe_retry(job, tenant_state, dep_events, permission_callback)
             return
 
         tenant_state.status = "complete"
         job.write_sidecar()
+        job.emit_event(
+            "tenant_complete",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+        )
 
     async def _maybe_retry(
         self,
         job: Job,
         tenant_state: TenantState,
         dep_events: dict[str, asyncio.Event],
+        permission_callback: PermissionCallback | None = None,
     ) -> None:
+        contract = tenant_state.contract
         tenant_state.retry_count += 1
-        if tenant_state.retry_count >= tenant_state.contract.max_retries:
+        if tenant_state.retry_count >= contract.max_retries:
             tenant_state.status = "escalated"
             job.write_sidecar()
+            job.emit_event(
+                "tenant_escalated",
+                tenant_id=contract.tenant_id,
+                role=contract.role,
+                retry_count=tenant_state.retry_count,
+                last_error=tenant_state.last_error,
+            )
             return
         tenant_state.checkpoints_passed = []
         tenant_state.status = "pending"
         job.write_sidecar()
-        task = asyncio.create_task(self._run_tenant(job, tenant_state, dep_events))
+        job.emit_event(
+            "tenant_retrying",
+            tenant_id=contract.tenant_id,
+            role=contract.role,
+            retry_count=tenant_state.retry_count,
+            last_error=tenant_state.last_error,
+        )
+        task = asyncio.create_task(
+            self._run_tenant(job, tenant_state, dep_events, permission_callback)
+        )
         tenant_state.task = task
 
     def _build_shared_context(self, job: Job, contract: Contract) -> str | None:

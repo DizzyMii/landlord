@@ -65,7 +65,7 @@ async def test_e2e_two_tenant_happy_path(tmp_path: Path):
 
     mock_client.call_forced_tool = fake_call_forced_tool
 
-    def factory(system_prompt, checkpoint_tools, work_dir, model):
+    def factory(system_prompt, checkpoint_tools, work_dir, model, **kwargs):
         for role in ("backend", "frontend"):
             if f"You are a {role}" in system_prompt:
                 return ScriptedSession(role)

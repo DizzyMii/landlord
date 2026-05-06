@@ -105,6 +105,26 @@ async def test_registry_replace_plan_raises_unknown_job_error_for_unknown_id():
         await reg.replace_plan("nonexistent", [_simple_contract("x")])
 
 
+def test_emit_event_appends_jsonl(tmp_path: Path):
+    plan = [_simple_contract("a")]
+    job = Job.create(prompt="p", plan=plan, output_dir=tmp_path)
+
+    job.emit_event("job_created", prompt="p")
+    job.emit_event("tenant_started", tenant_id=plan[0].tenant_id, role="a")
+    job.emit_event("tenant_complete", tenant_id=plan[0].tenant_id, role="a")
+
+    events_path = job.output_dir / "events.jsonl"
+    assert events_path.exists()
+    lines = events_path.read_text().strip().splitlines()
+    assert len(lines) == 3
+    parsed = [json.loads(line) for line in lines]
+    assert [e["type"] for e in parsed] == ["job_created", "tenant_started", "tenant_complete"]
+    assert all(e["job_id"] == job.job_id for e in parsed)
+    assert all("ts" in e for e in parsed)
+    assert parsed[0]["prompt"] == "p"
+    assert parsed[1]["role"] == "a"
+
+
 @pytest.mark.asyncio
 async def test_tenant_state_to_dict_roundtrip(tmp_path: Path):
     plan = [_simple_contract("a")]
