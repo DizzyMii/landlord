@@ -20,9 +20,10 @@ drive it.
 - **Tenants inherit your Claude Code config.** Skills, `CLAUDE.md`, hooks, user
   MCP servers — all available inside every tenant via `setting_sources=["user"]`
   and `skills="all"`.
-- **5-tool MCP surface** — `start_orchestration`, `approve_plan`, `get_status`,
+- **6-tool MCP surface** — `run_orchestration` (one-shot streaming) plus the
+  step-by-step quartet `start_orchestration`, `approve_plan`, `get_status`,
   `get_artifacts`, `cancel`. That's the whole API.
-- **~1,200 LOC runtime, 52 tests.** Readable in an afternoon.
+- **Readable runtime, 114 tests.** Readable in an afternoon.
 
 ### 60-second install
 
@@ -33,7 +34,7 @@ setx CLAUDE_CODE_OAUTH_TOKEN "<paste>"   # Windows. Unix: export CLAUDE_CODE_OAU
 claude mcp add -s user landlord landlord-mcp
 ```
 
-Restart Claude Code. The five Landlord tools become discoverable; ask the model
+Restart Claude Code. The six Landlord tools become discoverable; ask the model
 to orchestrate something.
 
 ### Trust model
@@ -155,7 +156,7 @@ Or add this to `~/.claude.json` (user scope) manually:
 }
 ```
 
-Restart Claude Code; the five Landlord tools will be discoverable to the model.
+Restart Claude Code; the six Landlord tools will be discoverable to the model.
 
 ## Tenant inheritance
 
@@ -176,8 +177,9 @@ it's all-or-nothing.
 
 | Tool | Purpose |
 |---|---|
-| `start_orchestration(prompt, output_dir?)` | Decompose the prompt into a plan. Returns `job_id` and the plan awaiting approval. |
-| `approve_plan(job_id, edits?)` | Approve (or replace with edits) the plan. Launches tenants. |
+| `run_orchestration(prompt, output_dir?)` | One-shot: decompose, auto-approve, run, and stream live progress. Recommended entry point. Returns final artifacts when terminal. |
+| `start_orchestration(prompt, output_dir?)` | Decompose the prompt into a plan. Returns `job_id` and the plan awaiting approval. Use when you want to inspect or edit the plan before launch. |
+| `approve_plan(job_id, edits?)` | Approve (or replace with edits) the plan. Launches tenants and streams progress until terminal. |
 | `get_status(job_id)` | Poll overall status plus per-tenant state. |
 | `get_artifacts(job_id)` | Retrieve final artifacts and file listings once the job is done/cancelled. |
 | `cancel(job_id)` | Cancel a running or pending job. |
