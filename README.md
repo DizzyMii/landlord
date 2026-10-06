@@ -1,3 +1,5 @@
+<img src=".github/banner.svg" width="100%" alt="Landlord" />
+
 # Landlord
 
 **Parallel Claude agents with contracts, not prompts.**
